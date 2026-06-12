@@ -149,6 +149,17 @@
           </div>
         </div>
         <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Your vehicle</span><span class="setting-desc">Powers the “worth the drive?” math</span></div>
+          <div class="vehicle-fields">
+            <label class="num-field"><span>L/100 km</span><input id="econ-input" type="number" min="3" max="30" step="0.1" inputmode="decimal"></label>
+            <label class="num-field"><span>Fill (L)</span><input id="fill-input" type="number" min="10" max="200" step="5" inputmode="numeric"></label>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Fill-up logbook</span><span class="setting-desc">Track what you actually pay and burn</span></div>
+          <button id="logbook-btn" class="chip">Open logbook</button>
+        </div>
+        <div class="setting-row">
           <div class="setting-info"><span class="setting-name">Hide closed stations</span><span class="setting-desc">Skip stations that are closed right now</span></div>
           <button id="toggle-closed" class="switch" role="switch" aria-checked="false" aria-label="Hide closed stations"><span class="knob"></span></button>
         </div>
@@ -157,6 +168,37 @@
           <button id="toggle-unpriced" class="switch" role="switch" aria-checked="false" aria-label="Show stations without prices"><span class="knob"></span></button>
         </div>
         <p id="settings-about" class="settings-about"></p>
+      </div>
+    </div>
+  </div>
+
+  <div id="logbook-overlay" class="settings-overlay" hidden>
+    <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="logbook-title">
+      <div class="settings-head">
+        <h2 id="logbook-title">⛽ Fill-up logbook</h2>
+        <button id="logbook-close" class="ctl ctl-icon" aria-label="Close logbook">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="settings-body">
+        <div id="log-stats" class="log-stats" hidden></div>
+        <form id="log-form" class="log-form">
+          <input id="log-station" type="text" placeholder="Station" required />
+          <div class="log-grid">
+            <label class="num-field"><span>Litres</span><input id="log-litres" type="number" min="1" max="200" step="0.01" inputmode="decimal" required></label>
+            <label class="num-field"><span>¢/L</span><input id="log-cents" type="number" min="50" max="400" step="0.1" inputmode="decimal" required></label>
+            <label class="num-field"><span>Odometer km</span><input id="log-odo" type="number" min="0" step="1" inputmode="numeric" placeholder="optional"></label>
+            <label class="num-field"><span>Date</span><input id="log-date" type="date" required></label>
+          </div>
+          <div class="log-actions">
+            <span id="log-total" class="log-total"></span>
+            <button type="submit" class="ctl ctl-primary">Save fill</button>
+          </div>
+        </form>
+        <ul id="log-list" class="log-list"></ul>
+        <div class="log-foot">
+          <button id="log-export" class="link-btn">Export CSV</button>
+        </div>
       </div>
     </div>
   </div>

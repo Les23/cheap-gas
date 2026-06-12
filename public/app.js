@@ -17,6 +17,8 @@ const DEFAULT_SETTINGS = {
   refreshMins: 10,        // 0 = off
   showUnpricedDefault: false,
   hideClosed: false,
+  econ: 9.0,   // vehicle L/100km
+  fillL: 50,   // typical fill, litres
 };
 
 const els = {
@@ -42,6 +44,21 @@ const els = {
   statAvg: document.getElementById('stat-avg'),
   statHigh: document.getElementById('stat-high'),
   skeletons: document.getElementById('skeletons'),
+  econInput: document.getElementById('econ-input'),
+  fillInput: document.getElementById('fill-input'),
+  logbookBtn: document.getElementById('logbook-btn'),
+  logbookOverlay: document.getElementById('logbook-overlay'),
+  logbookClose: document.getElementById('logbook-close'),
+  logStats: document.getElementById('log-stats'),
+  logForm: document.getElementById('log-form'),
+  logStation: document.getElementById('log-station'),
+  logLitres: document.getElementById('log-litres'),
+  logCents: document.getElementById('log-cents'),
+  logOdo: document.getElementById('log-odo'),
+  logDate: document.getElementById('log-date'),
+  logList: document.getElementById('log-list'),
+  logTotal: document.getElementById('log-total'),
+  logExport: document.getElementById('log-export'),
   settingsBtn: document.getElementById('settings-btn'),
   settingsOverlay: document.getElementById('settings-overlay'),
   settingsClose: document.getElementById('settings-close'),
@@ -348,7 +365,11 @@ function closeSettings() { els.settingsOverlay.hidden = true; }
 els.settingsBtn.addEventListener('click', openSettings);
 els.settingsClose.addEventListener('click', closeSettings);
 els.settingsOverlay.addEventListener('click', (e) => { if (e.target === els.settingsOverlay) closeSettings(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !els.settingsOverlay.hidden) closeSettings(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!els.settingsOverlay.hidden) closeSettings();
+  if (!els.logbookOverlay.hidden) els.logbookOverlay.hidden = true;
+});
 
 document.querySelectorAll('.seg[data-setting]').forEach((seg) => {
   seg.addEventListener('click', (e) => {
@@ -388,11 +409,123 @@ function syncSettingsUI() {
   els.toggleClosed.setAttribute('aria-checked', String(state.settings.hideClosed));
   [...els.radius.options].forEach((o) => { o.textContent = RADIUS_LABELS[state.settings.distUnit][o.value]; });
 
+  els.econInput.value = state.settings.econ;
+  els.fillInput.value = state.settings.fillL;
+
   let about = 'CheapGas · prices via Google Places · map © OpenStreetMap · CARTO · Esri';
   if (lastResponse?.mock) about += ' · running on sample data';
   else if (lastResponse) about += ` · API calls today ${lastResponse.budget.used}/${lastResponse.budget.limit}`;
   els.settingsAbout.textContent = about;
 }
+
+els.econInput.addEventListener('change', () => {
+  state.settings.econ = Math.min(30, Math.max(3, Number(els.econInput.value) || 9));
+  saveState(); syncSettingsUI(); render();
+});
+els.fillInput.addEventListener('change', () => {
+  state.settings.fillL = Math.min(200, Math.max(10, Number(els.fillInput.value) || 50));
+  saveState(); syncSettingsUI(); render();
+});
+
+// ------------------------------------------------------------------ logbook
+function loadLog() {
+  try { return JSON.parse(localStorage.getItem('cheapgas-logbook')) || []; } catch { return []; }
+}
+function saveLog(arr) { localStorage.setItem('cheapgas-logbook', JSON.stringify(arr)); }
+
+function openLogbook() {
+  const sel = refs.get(selectedId);
+  const selStation = sel ? stations.find((s) => s.id === selectedId) : null;
+  const src = selStation || stations.find((s) => s.prices[state.fuel]);
+  if (src && !els.logStation.value) els.logStation.value = src.name;
+  if (src?.prices[state.fuel] && !els.logCents.value) els.logCents.value = src.prices[state.fuel].cents;
+  if (!els.logLitres.value) els.logLitres.value = state.settings.fillL;
+  els.logDate.value = localDate();
+  renderLogbook();
+  closeSettings();
+  els.logbookOverlay.hidden = false;
+}
+
+function renderLogbook() {
+  const log = loadLog().sort((a, b) => (a.d < b.d ? 1 : -1));
+  // stats
+  if (log.length) {
+    const spent = log.reduce((a, f) => a + (f.litres * f.cents) / 100, 0);
+    const ym = localDate().slice(0, 7);
+    const monthSpent = log.filter((f) => f.d.startsWith(ym)).reduce((a, f) => a + (f.litres * f.cents) / 100, 0);
+    const odoFills = log.filter((f) => f.odo).sort((a, b) => a.odo - b.odo);
+    let econTxt = 'add odometer';
+    if (odoFills.length >= 2) {
+      const span = odoFills[odoFills.length - 1].odo - odoFills[0].odo;
+      const litres = odoFills.slice(1).reduce((a, f) => a + f.litres, 0);
+      if (span > 0) econTxt = `${((litres / span) * 100).toFixed(1)} L/100km`;
+    }
+    els.logStats.innerHTML =
+      `<div class="stat"><span class="stat-label">Fills</span><span class="stat-value">${log.length}</span></div>` +
+      `<div class="stat"><span class="stat-label">This month</span><span class="stat-value">$${monthSpent.toFixed(0)}</span></div>` +
+      `<div class="stat"><span class="stat-label">All time</span><span class="stat-value">$${spent.toFixed(0)}</span></div>` +
+      `<div class="stat"><span class="stat-label">Real economy</span><span class="stat-value">${econTxt}</span></div>`;
+    els.logStats.hidden = false;
+  } else {
+    els.logStats.hidden = true;
+  }
+  // list
+  els.logList.innerHTML = '';
+  log.forEach((f) => {
+    const li = document.createElement('li');
+    li.className = 'log-row';
+    li.innerHTML =
+      `<div class="log-row-main"><strong>${esc(f.station)}</strong>` +
+      `<span>${f.d} · ${f.litres} L @ ${f.cents}¢ = $${((f.litres * f.cents) / 100).toFixed(2)}${f.odo ? ` · ${f.odo.toLocaleString()} km` : ''}</span></div>` +
+      `<button class="log-del" aria-label="Delete fill">✕</button>`;
+    li.querySelector('.log-del').addEventListener('click', () => {
+      saveLog(loadLog().filter((x) => x.ts !== f.ts));
+      renderLogbook();
+    });
+    els.logList.appendChild(li);
+  });
+  els.logExport.hidden = log.length === 0;
+}
+
+els.logbookBtn.addEventListener('click', openLogbook);
+els.logbookClose.addEventListener('click', () => { els.logbookOverlay.hidden = true; });
+els.logbookOverlay.addEventListener('click', (e) => { if (e.target === els.logbookOverlay) els.logbookOverlay.hidden = true; });
+
+function updateLogTotal() {
+  const l = Number(els.logLitres.value), c = Number(els.logCents.value);
+  els.logTotal.textContent = l > 0 && c > 0 ? `= $${((l * c) / 100).toFixed(2)}` : '';
+}
+els.logLitres.addEventListener('input', updateLogTotal);
+els.logCents.addEventListener('input', updateLogTotal);
+
+els.logForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const fill = {
+    ts: Date.now(),
+    d: els.logDate.value || localDate(),
+    station: els.logStation.value.trim() || 'Station',
+    litres: Number(els.logLitres.value),
+    cents: Number(els.logCents.value),
+    odo: Number(els.logOdo.value) || null,
+  };
+  if (!(fill.litres > 0) || !(fill.cents > 0)) return;
+  saveLog([...loadLog(), fill]);
+  els.logLitres.value = '';
+  els.logOdo.value = '';
+  updateLogTotal();
+  renderLogbook();
+});
+
+els.logExport.addEventListener('click', () => {
+  const log = loadLog().sort((a, b) => (a.d < b.d ? -1 : 1));
+  const rows = [['date', 'station', 'litres', 'cents_per_L', 'total_dollars', 'odometer_km'],
+    ...log.map((f) => [f.d, `"${f.station.replace(/"/g, '""')}"`, f.litres, f.cents, ((f.litres * f.cents) / 100).toFixed(2), f.odo ?? ''])];
+  const csv = rows.map((r) => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = 'cheapgas-logbook.csv';
+  a.click();
+});
 
 // ---------------------------------------------------------------- auto-location
 function getGPS() {
@@ -520,9 +653,15 @@ function renderCompare(byPrice, fuel) {
   if (mine.id === best.id || diff <= 0) {
     line = `<span class="cmp-good">cheapest around right now 🎉</span>`;
   } else {
-    const save = ((diff / 100) * 50).toFixed(2);
+    const { fillL, econ } = state.settings;
+    const save = (diff / 100) * fillL;
+    const driveCost = 2 * best.distanceKm * (econ / 100) * (bestC / 100); // round trip
+    const net = save - driveCost;
+    const verdict = net > 0.05
+      ? `≈ <span class="cmp-good">$${net.toFixed(2)} net</span> after the drive — worth it`
+      : `but the ${fmtDist(best.distanceKm)} round trip burns ~$${driveCost.toFixed(2)} — <span class="cmp-bad">not worth it</span>`;
     line = `<span class="cmp-bad">+${diff}¢</span> vs ${esc(best.name)} (${priceText(bestC)}${priceUnitLabel()}) — ` +
-      `switching saves ~$${save} per 50 L fill`;
+      `saves $${save.toFixed(2)} on ${fillL} L, ${verdict}`;
   }
 
   const hist = loadHistory()[fuel] || [];
