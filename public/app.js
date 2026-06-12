@@ -212,7 +212,11 @@ function priceUnitLabel() { return state.settings.priceUnit === 'dollars' ? '/L'
 
 function fmtPrice(p) {
   if (!p) return '<span class="unit">—</span>';
-  if (p.currency !== 'CAD') return `${(p.cents / 100).toFixed(3)}<span class="unit">${p.currency}/L</span>`;
+  if (p.currency && p.currency !== 'CAD') {
+    // US pumps post per-gallon prices; other countries vary, default to /L
+    const unit = p.currency === 'USD' ? 'USD/gal' : `${p.currency}/L`;
+    return `${(p.cents / 100).toFixed(2)}<span class="unit">${unit}</span>`;
+  }
   return `${priceText(p.cents)}<span class="unit">${priceUnitLabel()}</span>`;
 }
 
@@ -1544,7 +1548,7 @@ function makeCard(s, { tier, best, priced }) {
   const p = s.prices[state.fuel];
   const priceHtml = priced
     ? (p.currency && p.currency !== 'CAD'
-      ? `${(p.cents / 100).toFixed(3)}<span class="unit">${p.currency}/L</span>`
+      ? fmtPrice(p)
       : `${priceText(effCents(s, state.fuel))}<span class="unit">${priceUnitLabel()}</span>`)
     : fmtPrice(null);
   const loyaltyNote = off > 0
