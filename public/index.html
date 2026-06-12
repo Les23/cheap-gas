@@ -92,6 +92,7 @@
       </div>
 
       <div id="compare-card" class="compare-card" hidden></div>
+      <div id="brand-bar" class="brand-bar" hidden></div>
 
       <div class="panel-scroll">
         <div id="skeletons" hidden aria-hidden="true">
@@ -146,6 +147,10 @@
           <div class="seg" data-setting="refreshMins" role="group" aria-label="Auto-refresh interval">
             <button data-value="0">Off</button><button data-value="5">5m</button><button data-value="10">10m</button><button data-value="20">20m</button>
           </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Hide closed stations</span><span class="setting-desc">Skip stations that are closed right now</span></div>
+          <button id="toggle-closed" class="switch" role="switch" aria-checked="false" aria-label="Hide closed stations"><span class="knob"></span></button>
         </div>
         <div class="setting-row">
           <div class="setting-info"><span class="setting-name">Stations without prices</span><span class="setting-desc">Show stations that report no price</span></div>

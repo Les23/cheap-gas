@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS = {
   sort: 'price',          // price | distance
   refreshMins: 10,        // 0 = off
   showUnpricedDefault: false,
+  hideClosed: false,
 };
 
 const els = {
@@ -34,6 +35,8 @@ const els = {
   showUnpriced: document.getElementById('show-unpriced'),
   searchArea: document.getElementById('search-area-btn'),
   compare: document.getElementById('compare-card'),
+  brandBar: document.getElementById('brand-bar'),
+  toggleClosed: document.getElementById('toggle-closed'),
   statsStrip: document.getElementById('stats-strip'),
   statCheap: document.getElementById('stat-cheap'),
   statAvg: document.getElementById('stat-avg'),
@@ -60,6 +63,7 @@ state = {
   follow: state.follow ?? (state.center ? state.center.label === 'my location' : true),
   settings: { ...DEFAULT_SETTINGS, ...(state.settings || {}) },
   favorites: state.favorites || [], // [{ id, name }]
+  brands: state.brands || [],       // selected brand labels; empty = all
 };
 
 let stations = [];
@@ -160,26 +164,31 @@ function monoColor(name) { return MONO_COLORS[hashStr(name) % MONO_COLORS.length
 // Unmatched brands (and any favicon that fails to load) fall back to the
 // coloured-letter tile.
 const BRAND_DOMAINS = [
-  [/petro[\s-]?(canada|pass)/i, 'petro-canada.ca'],
-  [/esso/i, 'esso.ca'],
-  [/shell/i, 'shell.ca'],
-  [/mobil/i, 'mobil.com'],
-  [/7[\s-]?eleven/i, '7-eleven.ca'],
-  [/canadian\s?tire|gas\+/i, 'canadiantire.ca'],
-  [/costco/i, 'costco.ca'],
-  [/circle\s?k/i, 'circlek.com'],
-  [/ultramar/i, 'ultramar.ca'],
-  [/chevron/i, 'chevron.com'],
-  [/husky/i, 'myhusky.ca'],
-  [/pioneer/i, 'pioneer.ca'],
-  [/fas\s?gas/i, 'fasgas.ca'],
-  [/irving/i, 'irvingoil.com'],
-  [/macewen/i, 'macewen.ca'],
+  [/petro[\s-]?(canada|pass)/i, 'petro-canada.ca', 'Petro-Canada'],
+  [/esso/i, 'esso.ca', 'Esso'],
+  [/shell/i, 'shell.ca', 'Shell'],
+  [/mobil/i, 'mobil.com', 'Mobil'],
+  [/7[\s-]?eleven/i, '7-eleven.ca', '7-Eleven'],
+  [/canadian\s?tire|gas\+/i, 'canadiantire.ca', 'Canadian Tire'],
+  [/costco/i, 'costco.ca', 'Costco'],
+  [/circle\s?k/i, 'circlek.com', 'Circle K'],
+  [/ultramar/i, 'ultramar.ca', 'Ultramar'],
+  [/chevron/i, 'chevron.com', 'Chevron'],
+  [/husky/i, 'myhusky.ca', 'Husky'],
+  [/pioneer/i, 'pioneer.ca', 'Pioneer'],
+  [/fas\s?gas/i, 'fasgas.ca', 'Fas Gas'],
+  [/irving/i, 'irvingoil.com', 'Irving'],
+  [/macewen/i, 'macewen.ca', 'MacEwen'],
 ];
 
 function brandDomain(name) {
   const hit = BRAND_DOMAINS.find(([re]) => re.test(name));
   return hit ? hit[1] : null;
+}
+
+function brandLabel(name) {
+  const hit = BRAND_DOMAINS.find(([re]) => re.test(name));
+  return hit ? hit[2] : name;
 }
 
 function esc(s) {
@@ -363,12 +372,20 @@ els.toggleUnpriced.addEventListener('click', () => {
   render();
 });
 
+els.toggleClosed.addEventListener('click', () => {
+  state.settings.hideClosed = !state.settings.hideClosed;
+  saveState();
+  syncSettingsUI();
+  render();
+});
+
 function syncSettingsUI() {
   document.querySelectorAll('.seg[data-setting]').forEach((seg) => {
     const current = String(state.settings[seg.dataset.setting]);
     seg.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.value === current));
   });
   els.toggleUnpriced.setAttribute('aria-checked', String(showUnpriced));
+  els.toggleClosed.setAttribute('aria-checked', String(state.settings.hideClosed));
   [...els.radius.options].forEach((o) => { o.textContent = RADIUS_LABELS[state.settings.distUnit][o.value]; });
 
   let about = 'CheapGas · prices via Google Places · map © OpenStreetMap · CARTO · Esri';
@@ -542,8 +559,13 @@ function popupHtml(s) {
     .map((f) => `<div class="pp-row"><span>${FUEL_LABELS[f]}</span><span><strong>${fmtPrice(s.prices[f])}</strong> <span class="when">${ago(s.prices[f].updated)}</span></span></div>`)
     .join('') || '<div class="pp-row">No price data reported</div>';
   const dir = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`;
+  const meta = [
+    s.rating ? `★ ${s.rating}` : '',
+    s.openNow === false ? '<span style="color:#ef4444;font-weight:700">Closed</span>' : '',
+    fmtDist(s.distanceKm),
+  ].filter(Boolean).join(' · ');
   return `<div class="gas-popup"><div class="pp-name">${esc(s.name)}</div>` +
-    `<div class="pp-addr">${esc(s.address)} · ${fmtDist(s.distanceKm)}</div>${rows}` +
+    `<div class="pp-addr">${esc(s.address)} · ${meta}</div>${rows}` +
     `<a class="pp-dir" href="${dir}" target="_blank" rel="noopener">Directions ↗</a></div>`;
 }
 
@@ -596,10 +618,13 @@ function makeCard(s, { tier, best, priced }) {
     ? `<div class="monogram has-logo"><img loading="lazy" alt="" src="https://www.google.com/s2/favicons?domain=${domain}&sz=64"></div>`
     : `<div class="monogram" style="background:${monoColor(s.name)}">${esc(s.name.charAt(0))}</div>`;
   const fav = isFav(s.id);
+  const closed = s.openNow === false ? '<span class="closed-chip">Closed</span>' : '';
+  if (s.openNow === false) li.classList.add('closed');
+  const stars = s.rating ? `★ ${s.rating}${s.ratingCount ? ` (${s.ratingCount})` : ''} · ` : '';
   li.innerHTML =
     badge +
-    `<div class="station-info"><div class="station-name">${esc(s.name)}</div>` +
-    `<div class="station-sub">${fmtDist(s.distanceKm)} · ${esc(s.address)}</div></div>` +
+    `<div class="station-info"><div class="station-name">${esc(s.name)}${closed}</div>` +
+    `<div class="station-sub">${stars}${fmtDist(s.distanceKm)} · ${esc(s.address)}</div></div>` +
     `<div class="station-price">${price}</div>` +
     `<button class="star-btn${fav ? ' active' : ''}" title="${fav ? 'Remove from' : 'Add to'} favourites" aria-label="${fav ? 'Remove from' : 'Add to'} favourites">${fav ? '★' : '☆'}</button>`;
   li.querySelector('.star-btn').addEventListener('click', (e) => {
@@ -631,15 +656,47 @@ function makeMarker(s, { tier, best, priced }) {
   return L.marker([s.lat, s.lng], { icon, riseOnHover: true, zIndexOffset: baseZ });
 }
 
+function renderBrandBar() {
+  const counts = new Map();
+  for (const s of stations) {
+    const label = brandLabel(s.name);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  const labels = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([l]) => l).slice(0, 10);
+  els.brandBar.hidden = labels.length < 2;
+  els.brandBar.innerHTML = '';
+  const mkChip = (label, active, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'chip' + (active ? ' active' : '');
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    els.brandBar.appendChild(b);
+  };
+  mkChip('All', state.brands.length === 0, () => { state.brands = []; saveState(); render(); });
+  for (const label of labels) {
+    mkChip(label, state.brands.includes(label), () => {
+      state.brands = state.brands.includes(label)
+        ? state.brands.filter((x) => x !== label)
+        : [...state.brands, label];
+      saveState();
+      render();
+    });
+  }
+}
+
 function render(recenter = false) {
   const fuel = state.fuel;
-  const priced = stations.filter((s) => s.prices[fuel]);
+  renderBrandBar();
+  let pool = stations;
+  if (state.brands.length) pool = pool.filter((s) => state.brands.includes(brandLabel(s.name)));
+  if (state.settings.hideClosed) pool = pool.filter((s) => s.openNow !== false);
+  const priced = pool.filter((s) => s.prices[fuel]);
   const byPrice = [...priced].sort((a, b) => a.prices[fuel].cents - b.prices[fuel].cents);
   const priceRank = new Map(byPrice.map((s, i) => [s.id, i]));
   const ordered = state.settings.sort === 'distance'
     ? [...priced].sort((a, b) => a.distanceKm - b.distanceKm)
     : byPrice;
-  const unpriced = stations.filter((s) => !s.prices[fuel]);
+  const unpriced = pool.filter((s) => !s.prices[fuel]);
 
   els.list.innerHTML = '';
   refs.clear();

@@ -117,7 +117,7 @@ async function googleNearby(pt) {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': cfg.apiKey,
       'X-Goog-FieldMask':
-        'places.id,places.displayName,places.formattedAddress,places.location,places.businessStatus,places.fuelOptions',
+        'places.id,places.displayName,places.formattedAddress,places.location,places.businessStatus,places.fuelOptions,places.rating,places.userRatingCount,places.currentOpeningHours.openNow',
     },
     body: JSON.stringify({
       includedTypes: ['gas_station'],
@@ -160,6 +160,9 @@ function normalizePlace(p) {
     address: p.formattedAddress || '',
     lat: p.location?.latitude,
     lng: p.location?.longitude,
+    rating: p.rating ?? null,
+    ratingCount: p.userRatingCount ?? null,
+    openNow: p.currentOpeningHours?.openNow ?? null, // null = hours unknown
     prices,
   };
 }
@@ -236,6 +239,9 @@ function mockStations(lat, lng, radiusKm, key) {
       address: `${100 + Math.floor(rand() * 9900)} ${MOCK_STREETS[Math.floor(rand() * MOCK_STREETS.length)]}`,
       lat: p.lat,
       lng: p.lng,
+      rating: +(3.3 + rand() * 1.6).toFixed(1),
+      ratingCount: 5 + Math.floor(rand() * 400),
+      openNow: rand() < 0.92,
       prices,
     });
   }
