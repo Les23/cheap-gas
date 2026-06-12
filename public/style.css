@@ -628,7 +628,23 @@ button, input, select { font: inherit; color: inherit; }
 }
 .switch[aria-checked="true"] .knob { left: 21px; }
 
-.vehicle-fields { display: flex; gap: 8px; flex-shrink: 0; }
+.vehicle-fields { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.vehicle-picker { display: flex; gap: 4px; align-items: center; }
+.vehicle-picker .chip { padding: 5px 9px; }
+
+.service-box {
+  margin: 10px 0 4px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+.service-inputs { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.service-inputs .num-field { flex: 1 1 110px; }
+.service-inputs .num-field input { width: 100%; }
+.svc-status { margin-top: 7px; font-size: 12px; font-weight: 650; }
+.svc-status.ok { color: var(--good); }
+.svc-status.due { color: var(--mid); }
+.svc-status.overdue { color: var(--high); }
 
 .num-field { display: flex; flex-direction: column; gap: 1px; }
 .num-field > span { font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }

@@ -60,6 +60,13 @@ const els = {
   toggleAlert: document.getElementById('toggle-alert'),
   econInput: document.getElementById('econ-input'),
   fillInput: document.getElementById('fill-input'),
+  vehicleSelect: document.getElementById('vehicle-select'),
+  vehicleAdd: document.getElementById('vehicle-add'),
+  vehicleDel: document.getElementById('vehicle-del'),
+  svcEvery: document.getElementById('svc-every'),
+  svcLast: document.getElementById('svc-last'),
+  svcSave: document.getElementById('svc-save'),
+  svcStatus: document.getElementById('svc-status'),
   logbookBtn: document.getElementById('logbook-btn'),
   insightsBtn: document.getElementById('insights-btn'),
   insightsOverlay: document.getElementById('insights-overlay'),
@@ -110,6 +117,37 @@ state = {
   favorites: state.favorites || [], // [{ id, name }]
   brands: state.brands || [],       // selected brand labels; empty = all
 };
+
+// migrate single-vehicle settings to the vehicles list (also re-applied after
+// cloud pulls, which can carry pre-vehicles settings)
+function ensureVehicles() {
+  if (!Array.isArray(state.settings.vehicles) || !state.settings.vehicles.length) {
+    state.settings.vehicles = [{
+      name: 'My car',
+      econ: state.settings.econ || 9,
+      fillL: state.settings.fillL || 50,
+      svcEvery: null,
+      svcLast: null,
+    }];
+    state.settings.vehicleIdx = 0;
+  }
+  if ((state.settings.vehicleIdx || 0) >= state.settings.vehicles.length) state.settings.vehicleIdx = 0;
+}
+ensureVehicles();
+
+function activeVehicle() {
+  const v = state.settings.vehicles;
+  const i = Math.min(state.settings.vehicleIdx || 0, v.length - 1);
+  return v[i];
+}
+
+// keep the flat econ/fillL mirrors (used by all the math) in step
+function mirrorVehicle() {
+  const v = activeVehicle();
+  state.settings.econ = v.econ;
+  state.settings.fillL = v.fillL;
+}
+mirrorVehicle();
 
 let stations = [];
 let lastResponse = null;
@@ -489,8 +527,17 @@ function syncSettingsUI() {
   els.toggleClosed.setAttribute('aria-checked', String(state.settings.hideClosed));
   [...els.radius.options].forEach((o) => { o.textContent = RADIUS_LABELS[state.settings.distUnit][o.value]; });
 
-  els.econInput.value = state.settings.econ;
-  els.fillInput.value = state.settings.fillL;
+  const veh = activeVehicle();
+  els.vehicleSelect.innerHTML = '';
+  state.settings.vehicles.forEach((v, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = v.name;
+    if (v === veh) o.selected = true;
+    els.vehicleSelect.appendChild(o);
+  });
+  els.econInput.value = veh.econ;
+  els.fillInput.value = veh.fillL;
   els.alertCents.value = state.settings.alertCents;
   els.toggleAlert.setAttribute('aria-checked', String(state.settings.alertOn));
 
@@ -507,11 +554,38 @@ function syncSettingsUI() {
 }
 
 els.econInput.addEventListener('change', () => {
-  state.settings.econ = Math.min(30, Math.max(3, Number(els.econInput.value) || 9));
+  activeVehicle().econ = Math.min(30, Math.max(3, Number(els.econInput.value) || 9));
+  mirrorVehicle();
   saveState(); syncSettingsUI(); render();
 });
 els.fillInput.addEventListener('change', () => {
-  state.settings.fillL = Math.min(200, Math.max(10, Number(els.fillInput.value) || 50));
+  activeVehicle().fillL = Math.min(200, Math.max(10, Number(els.fillInput.value) || 50));
+  mirrorVehicle();
+  saveState(); syncSettingsUI(); render();
+});
+
+els.vehicleSelect.addEventListener('change', () => {
+  state.settings.vehicleIdx = Number(els.vehicleSelect.value) || 0;
+  mirrorVehicle();
+  saveState(); syncSettingsUI(); render();
+});
+
+els.vehicleAdd.addEventListener('click', () => {
+  const name = (window.prompt('Name the vehicle (e.g. Truck, Civic):') || '').trim();
+  if (!name) return;
+  state.settings.vehicles.push({ name, econ: 9, fillL: 50, svcEvery: null, svcLast: null });
+  state.settings.vehicleIdx = state.settings.vehicles.length - 1;
+  mirrorVehicle();
+  saveState(); syncSettingsUI(); render();
+});
+
+els.vehicleDel.addEventListener('click', () => {
+  if (state.settings.vehicles.length <= 1) { showInfo('You need at least one vehicle.'); return; }
+  const v = activeVehicle();
+  if (!window.confirm(`Remove "${v.name}"? Its logbook fills stay (tagged with its name).`)) return;
+  state.settings.vehicles = state.settings.vehicles.filter((x) => x !== v);
+  state.settings.vehicleIdx = 0;
+  mirrorVehicle();
   saveState(); syncSettingsUI(); render();
 });
 
@@ -559,6 +633,8 @@ function applySyncedState(cloud) {
   const fuel = s._fuel; const radius = s._radiusKm;
   delete s._fuel; delete s._radiusKm;
   state.settings = { ...DEFAULT_SETTINGS, ...s };
+  ensureVehicles();
+  mirrorVehicle();
   if (FUEL_LABELS[fuel]) state.fuel = fuel;
   if ([5, 10, 25, 50].includes(Number(radius))) state.radiusKm = Number(radius);
   state.favorites = Array.isArray(cloud.favorites) ? cloud.favorites : [];
@@ -802,14 +878,35 @@ function openLogbook() {
   els.logbookOverlay.hidden = false;
 }
 
+// Fills for a vehicle (untagged legacy fills count toward whichever is active)
+function vehicleFills(log, veh) {
+  return log.filter((f) => !f.veh || f.veh === veh.name);
+}
+
+function serviceStatus(veh) {
+  if (!veh.svcEvery || veh.svcLast == null) return null;
+  const fills = vehicleFills(loadLog(), veh).filter((f) => f.odo);
+  if (!fills.length) return null;
+  const latestOdo = Math.max(...fills.map((f) => f.odo));
+  const nextAt = veh.svcLast + veh.svcEvery;
+  const remaining = nextAt - latestOdo;
+  if (remaining <= 0) return { cls: 'overdue', text: `🔧 ${veh.name}: service overdue by ${Math.abs(remaining).toLocaleString()} km` };
+  if (remaining <= 500) return { cls: 'due', text: `🔧 ${veh.name}: service due soon — ~${remaining.toLocaleString()} km left` };
+  return { cls: 'ok', text: `🔧 ${veh.name}: next service in ~${remaining.toLocaleString()} km (at ${nextAt.toLocaleString()} km)` };
+}
+
 function renderLogbook() {
+  const veh = activeVehicle();
   const log = loadLog().sort((a, b) => (a.d < b.d ? 1 : -1));
-  // stats
-  if (log.length) {
-    const spent = log.reduce((a, f) => a + (f.litres * f.cents) / 100, 0);
+  const mine = vehicleFills(log, veh);
+  const multi = state.settings.vehicles.length > 1;
+
+  // stats (active vehicle)
+  if (mine.length) {
+    const spent = mine.reduce((a, f) => a + (f.litres * f.cents) / 100, 0);
     const ym = localDate().slice(0, 7);
-    const monthSpent = log.filter((f) => f.d.startsWith(ym)).reduce((a, f) => a + (f.litres * f.cents) / 100, 0);
-    const odoFills = log.filter((f) => f.odo).sort((a, b) => a.odo - b.odo);
+    const monthSpent = mine.filter((f) => f.d.startsWith(ym)).reduce((a, f) => a + (f.litres * f.cents) / 100, 0);
+    const odoFills = mine.filter((f) => f.odo).sort((a, b) => a.odo - b.odo);
     let econTxt = 'add odometer';
     if (odoFills.length >= 2) {
       const span = odoFills[odoFills.length - 1].odo - odoFills[0].odo;
@@ -817,7 +914,7 @@ function renderLogbook() {
       if (span > 0) econTxt = `${((litres / span) * 100).toFixed(1)} L/100km`;
     }
     els.logStats.innerHTML =
-      `<div class="stat"><span class="stat-label">Fills</span><span class="stat-value">${log.length}</span></div>` +
+      `<div class="stat"><span class="stat-label">${multi ? esc(veh.name) + ' fills' : 'Fills'}</span><span class="stat-value">${mine.length}</span></div>` +
       `<div class="stat"><span class="stat-label">This month</span><span class="stat-value">$${monthSpent.toFixed(0)}</span></div>` +
       `<div class="stat"><span class="stat-label">All time</span><span class="stat-value">$${spent.toFixed(0)}</span></div>` +
       `<div class="stat"><span class="stat-label">Real economy</span><span class="stat-value">${econTxt}</span></div>`;
@@ -825,14 +922,24 @@ function renderLogbook() {
   } else {
     els.logStats.hidden = true;
   }
-  // list
+
+  // service reminder
+  els.svcEvery.value = veh.svcEvery || '';
+  els.svcLast.value = veh.svcLast ?? '';
+  const svc = serviceStatus(veh);
+  els.svcStatus.className = 'svc-status' + (svc ? ` ${svc.cls}` : '');
+  els.svcStatus.textContent = svc ? svc.text
+    : 'Set a service interval and your last service odometer — fills with odometer readings keep it tracking.';
+
+  // list (all vehicles, tagged)
   els.logList.innerHTML = '';
   log.forEach((f) => {
     const li = document.createElement('li');
     li.className = 'log-row';
+    const tag = multi && f.veh ? ` · 🚗 ${esc(f.veh)}` : '';
     li.innerHTML =
       `<div class="log-row-main"><strong>${esc(f.station)}</strong>` +
-      `<span>${f.d} · ${f.litres} L @ ${f.cents}¢ = $${((f.litres * f.cents) / 100).toFixed(2)}${f.odo ? ` · ${f.odo.toLocaleString()} km` : ''}</span></div>` +
+      `<span>${f.d} · ${f.litres} L @ ${f.cents}¢ = $${((f.litres * f.cents) / 100).toFixed(2)}${f.odo ? ` · ${f.odo.toLocaleString()} km` : ''}${tag}</span></div>` +
       `<button class="log-del" aria-label="Delete fill">✕</button>`;
     li.querySelector('.log-del').addEventListener('click', () => {
       saveLog(loadLog().filter((x) => x.ts !== f.ts));
@@ -842,6 +949,14 @@ function renderLogbook() {
   });
   els.logExport.hidden = log.length === 0;
 }
+
+els.svcSave.addEventListener('click', () => {
+  const veh = activeVehicle();
+  veh.svcEvery = Number(els.svcEvery.value) || null;
+  veh.svcLast = els.svcLast.value === '' ? null : Number(els.svcLast.value);
+  saveState();
+  renderLogbook();
+});
 
 els.logbookBtn.addEventListener('click', openLogbook);
 els.logbookClose.addEventListener('click', () => { els.logbookOverlay.hidden = true; });
@@ -863,6 +978,7 @@ els.logForm.addEventListener('submit', (e) => {
     litres: Number(els.logLitres.value),
     cents: Number(els.logCents.value),
     odo: Number(els.logOdo.value) || null,
+    veh: activeVehicle().name,
   };
   if (!(fill.litres > 0) || !(fill.cents > 0)) return;
   saveLog([...loadLog(), fill]);
@@ -1693,6 +1809,18 @@ applyTheme();
 restartAutoRefresh();
 syncSettingsUI();
 initialSync(); // anonymous account + cloud pull (runs in the background)
+
+// overdue-service nudge, once per day
+setTimeout(() => {
+  for (const v of state.settings.vehicles) {
+    const svc = serviceStatus(v);
+    if (svc?.cls === 'overdue' && localStorage.getItem('cheapgas-svc-nag') !== localDate()) {
+      localStorage.setItem('cheapgas-svc-nag', localDate());
+      showInfo(svc.text + ' — log it in the logbook when done.');
+      break;
+    }
+  }
+}, 3000);
 
 if (state.center) {
   els.input.value = state.follow ? '' : state.center.label;

@@ -194,8 +194,15 @@
           </div>
         </div>
         <div class="setting-row">
-          <div class="setting-info"><span class="setting-name">Your vehicle</span><span class="setting-desc">Powers the “worth the drive?” math</span></div>
+          <div class="setting-info"><span class="setting-name">Your vehicles</span><span class="setting-desc">Powers the “worth the drive?” math &amp; per-car logbook</span></div>
           <div class="vehicle-fields">
+            <label class="num-field"><span>Vehicle</span>
+              <span class="vehicle-picker">
+                <select id="vehicle-select" class="loyalty-select"></select>
+                <button id="vehicle-add" class="chip" title="Add a vehicle">＋</button>
+                <button id="vehicle-del" class="chip" title="Remove this vehicle">✕</button>
+              </span>
+            </label>
             <label class="num-field"><span>L/100 km</span><input id="econ-input" type="number" min="3" max="30" step="0.1" inputmode="decimal"></label>
             <label class="num-field"><span>Fill (L)</span><input id="fill-input" type="number" min="10" max="200" step="5" inputmode="numeric"></label>
           </div>
@@ -244,6 +251,14 @@
             <button type="submit" class="ctl ctl-primary">Save fill</button>
           </div>
         </form>
+        <div class="service-box">
+          <div class="service-inputs">
+            <label class="num-field"><span>Service every (km)</span><input id="svc-every" type="number" min="1000" max="50000" step="500" inputmode="numeric" placeholder="e.g. 8000"></label>
+            <label class="num-field"><span>Last service at (km)</span><input id="svc-last" type="number" min="0" step="1" inputmode="numeric" placeholder="odometer"></label>
+            <button id="svc-save" class="chip">Save</button>
+          </div>
+          <div id="svc-status" class="svc-status"></div>
+        </div>
         <ul id="log-list" class="log-list"></ul>
         <div class="log-foot">
           <button id="log-export" class="link-btn">Export CSV</button>

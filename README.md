@@ -7,8 +7,16 @@ name. Pick a fuel grade and radius and get a ranked list + map of the cheapest
 stations. Prices auto-refresh every 10 minutes, and in "near me" mode the app
 re-checks your position on each refresh, so it follows you as you move.
 
-No frameworks — plain Node.js plus a single dependency (`web-push`) for
-price-alert notifications.
+No frameworks — plain Node.js plus two dependencies (`web-push` for
+notifications, `mysql2` for accounts/sync).
+
+Feature highlights: live station prices with ratings and open-now status,
+brand filter, favourites with a daily compare card, loyalty-aware effective
+pricing, route mode (cheapest gas along a drive, with trip fuel cost),
+multi-vehicle fill-up logbook with real fuel economy and service reminders,
+report-a-price corrections, savings & insights with price-history charts,
+push price alerts, saved places, dark mode, and anonymous cross-device sync —
+no registration anywhere.
 
 ## Run it
 
