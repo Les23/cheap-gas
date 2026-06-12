@@ -61,6 +61,10 @@ const els = {
   econInput: document.getElementById('econ-input'),
   fillInput: document.getElementById('fill-input'),
   logbookBtn: document.getElementById('logbook-btn'),
+  insightsBtn: document.getElementById('insights-btn'),
+  insightsOverlay: document.getElementById('insights-overlay'),
+  insightsClose: document.getElementById('insights-close'),
+  insightsBody: document.getElementById('insights-body'),
   logbookOverlay: document.getElementById('logbook-overlay'),
   logbookClose: document.getElementById('logbook-close'),
   logStats: document.getElementById('log-stats'),
@@ -407,6 +411,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!els.settingsOverlay.hidden) closeSettings();
   if (!els.logbookOverlay.hidden) els.logbookOverlay.hidden = true;
+  if (!els.insightsOverlay.hidden) els.insightsOverlay.hidden = true;
 });
 
 document.querySelectorAll('.seg[data-setting]').forEach((seg) => {
@@ -878,6 +883,98 @@ els.logExport.addEventListener('click', () => {
   a.click();
 });
 
+// ------------------------------------------------------------------ insights
+function lineChartSVG(rows, key1, key2) {
+  // rows: [{d, cheap, avg}] — draws two lines, returns inline SVG
+  const vals = rows.flatMap((r) => [r[key1], r[key2]]).filter((v) => v > 0);
+  if (!vals.length) return '';
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = (max - min) || 1;
+  const W = 320, H = 110, PAD = 6;
+  const x = (i) => PAD + (i * (W - 2 * PAD)) / Math.max(1, rows.length - 1);
+  const y = (v) => H - PAD - ((v - min) / span) * (H - 2 * PAD);
+  const line = (key) => rows.map((r, i) => `${x(i).toFixed(1)},${y(r[key]).toFixed(1)}`).join(' ');
+  return `<svg class="ins-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <polyline points="${line(key2)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <polyline points="${line(key1)}" fill="none" stroke="var(--accent-strong)" stroke-width="2.5"/>
+  </svg>
+  <div class="ins-chart-labels"><span>${priceText(min)}${priceUnitLabel()}</span><span>${priceText(max)}${priceUnitLabel()}</span></div>`;
+}
+
+function barChartSVG(pairs) {
+  // pairs: [[label, dollars]] — monthly spend bars
+  if (!pairs.length) return '';
+  const max = Math.max(...pairs.map(([, v]) => v)) || 1;
+  const W = 320, H = 90, gap = 8;
+  const bw = (W - gap * (pairs.length + 1)) / pairs.length;
+  const bars = pairs.map(([label, v], i) => {
+    const h = Math.max(2, (v / max) * (H - 30));
+    const bx = gap + i * (bw + gap);
+    return `<rect x="${bx.toFixed(1)}" y="${(H - 18 - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="var(--accent-strong)"/>` +
+      `<text x="${(bx + bw / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle" class="ins-bar-label">${label}</text>` +
+      `<text x="${(bx + bw / 2).toFixed(1)}" y="${(H - 22 - h).toFixed(1)}" text-anchor="middle" class="ins-bar-value">$${Math.round(v)}</text>`;
+  }).join('');
+  return `<svg class="ins-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">${bars}</svg>`;
+}
+
+async function openInsights() {
+  closeSettings();
+  els.insightsOverlay.hidden = false;
+  els.insightsBody.innerHTML = 'Crunching the numbers…';
+  const fuel = state.fuel;
+
+  // server history merged with anything this device recorded locally
+  let serverHist = [];
+  try {
+    if (state.center) {
+      const r = await fetch(`/api/history?lat=${state.center.lat}&lng=${state.center.lng}&fuel=${fuel}&days=60`);
+      if (r.ok) serverHist = (await r.json()).history;
+    }
+  } catch { /* offline */ }
+  const byDay = new Map();
+  for (const h of loadHistory()[fuel] || []) byDay.set(h.d, { d: h.d, cheap: h.cheap, avg: h.avg });
+  for (const h of serverHist) byDay.set(h.d, h);
+  const hist = [...byDay.values()].sort((a, b) => (a.d < b.d ? -1 : 1));
+
+  // savings: each logged fill vs that day's area average
+  const log = loadLog();
+  let saved = 0, counted = 0;
+  for (const f of log) {
+    const day = byDay.get(f.d);
+    if (!day?.avg) continue;
+    saved += ((day.avg - f.cents) / 100) * f.litres;
+    counted++;
+  }
+
+  // monthly spend (last 6 months with data)
+  const months = new Map();
+  for (const f of log) {
+    const m = f.d.slice(0, 7);
+    months.set(m, (months.get(m) || 0) + (f.litres * f.cents) / 100);
+  }
+  const monthPairs = [...months.entries()].sort().slice(-6)
+    .map(([m, v]) => [new Date(m + '-15').toLocaleString('en-CA', { month: 'short' }), v]);
+
+  const trendChart = hist.length >= 2
+    ? lineChartSVG(hist, 'cheap', 'avg') +
+      `<div class="ins-legend"><span class="ins-dot" style="background:var(--accent-strong)"></span>cheapest · <span class="ins-dot ins-dot-dash"></span>average</div>`
+    : `<p class="ins-note">Price history builds up automatically as you (or anyone) use the app — check back in a few days for the chart.</p>`;
+
+  const savedHtml = counted
+    ? `<div class="ins-big ${saved >= 0 ? 'cmp-good' : 'cmp-bad'}">${saved >= 0 ? '+' : '−'}$${Math.abs(saved).toFixed(2)}</div>
+       <p class="ins-note">across ${counted} logged fill${counted === 1 ? '' : 's'}, vs paying that day's area average${counted < log.length ? ` (${log.length - counted} older fills predate price tracking)` : ''}</p>`
+    : `<p class="ins-note">Log fills in the logbook and this starts adding up — each fill is compared against that day's area average.</p>`;
+
+  els.insightsBody.innerHTML =
+    `<h3 class="ins-h">${FUEL_LABELS[fuel]} price trend${state.center ? ` · ${esc(state.center.label)}` : ''}</h3>${trendChart}` +
+    `<h3 class="ins-h">What CheapGas has saved you</h3>${savedHtml}` +
+    (monthPairs.length ? `<h3 class="ins-h">Monthly fuel spend</h3>${barChartSVG(monthPairs)}` : '');
+}
+
+els.insightsBtn.addEventListener('click', openInsights);
+els.insightsClose.addEventListener('click', () => { els.insightsOverlay.hidden = true; });
+els.insightsOverlay.addEventListener('click', (e) => { if (e.target === els.insightsOverlay) els.insightsOverlay.hidden = true; });
+
 // ---------------------------------------------------------------- auto-location
 function getGPS() {
   return new Promise((resolve, reject) => {
@@ -1063,7 +1160,7 @@ async function goRoute() {
 
     route = { label: routeDest.label, distanceKm: rt.distanceKm, durationMin: rt.durationMin, coords: rt.coords };
     routeMode = true;
-    stations = [...byId.values()];
+    stations = applyReports([...byId.values()]);
     lastResponse = {
       fetchedAt: new Date().toISOString(),
       source: 'route',
@@ -1090,6 +1187,21 @@ async function goRoute() {
   }
 }
 
+// User price reports: when a report is fresher than Google's update, it
+// becomes the displayed price (tagged so the UI can say so).
+function applyReports(list) {
+  for (const s of list) {
+    if (!s.reports) continue;
+    for (const [fuel, rep] of Object.entries(s.reports)) {
+      const p = s.prices[fuel];
+      if (!p || new Date(rep.at) > new Date(p.updated || 0)) {
+        s.prices[fuel] = { cents: rep.cents, currency: 'CAD', updated: rep.at, reported: true, mine: rep.mine };
+      }
+    }
+  }
+  return list;
+}
+
 // ------------------------------------------------------------------ data
 async function load() {
   if (routeMode) return; // route results stay until you exit route mode
@@ -1102,7 +1214,7 @@ async function load() {
     const r = await fetch(`/api/stations?lat=${lat}&lng=${lng}&radiusKm=${state.radiusKm}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    stations = data.stations;
+    stations = applyReports(data.stations);
     lastResponse = data;
     lastLoadedAt = Date.now();
     els.mockBanner.hidden = !data.mock;
@@ -1202,7 +1314,7 @@ function tierOf(rank, total) {
 function popupHtml(s) {
   const rows = Object.keys(FUEL_LABELS)
     .filter((f) => s.prices[f])
-    .map((f) => `<div class="pp-row"><span>${FUEL_LABELS[f]}</span><span><strong>${fmtPrice(s.prices[f])}</strong> <span class="when">${ago(s.prices[f].updated)}</span></span></div>`)
+    .map((f) => `<div class="pp-row"><span>${FUEL_LABELS[f]}</span><span><strong>${fmtPrice(s.prices[f])}</strong> <span class="when">${s.prices[f].reported ? '✏️ ' : ''}${ago(s.prices[f].updated)}</span></span></div>`)
     .join('') || '<div class="pp-row">No price data reported</div>';
   const dir = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`;
   const meta = [
@@ -1219,24 +1331,55 @@ function popupHtml(s) {
   return `<div class="gas-popup"><div class="pp-name">${esc(s.name)}</div>` +
     `<div class="pp-addr">${esc(s.address)} · ${meta}</div>${rows}${yours}` +
     `<a class="pp-dir" href="${dir}" target="_blank" rel="noopener">Directions ↗</a>` +
-    `<a class="pp-dir pp-share" href="#" data-text="${esc(shareTxt)}" data-url="${dir}">Share</a></div>`;
+    `<a class="pp-dir pp-share" href="#" data-text="${esc(shareTxt)}" data-url="${dir}">Share</a>` +
+    `<a class="pp-dir pp-report" href="#" data-sid="${esc(s.id)}" data-cents="${p0 ? p0.cents : ''}">✏️ Fix price</a>` +
+    `<div class="pp-report-form"></div></div>`;
 }
 
-// Wire the Share link whenever a popup opens (Web Share API, clipboard fallback)
+// Wire Share + Fix-price links whenever a popup opens
 map.on('popupopen', (e) => {
-  const el = e.popup.getElement()?.querySelector('.pp-share');
-  if (!el) return;
-  el.addEventListener('click', async (ev) => {
+  const root = e.popup.getElement();
+  if (!root) return;
+
+  const share = root.querySelector('.pp-share');
+  share?.addEventListener('click', async (ev) => {
     ev.preventDefault();
-    const text = el.dataset.text;
-    const url = el.dataset.url;
     try {
-      if (navigator.share) await navigator.share({ title: 'CheapGas', text, url });
+      if (navigator.share) await navigator.share({ title: 'CheapGas', text: share.dataset.text, url: share.dataset.url });
       else {
-        await navigator.clipboard.writeText(`${text}\n${url}`);
+        await navigator.clipboard.writeText(`${share.dataset.text}\n${share.dataset.url}`);
         showInfo('Copied to clipboard — paste it anywhere.');
       }
     } catch { /* user cancelled the share sheet */ }
+  });
+
+  const report = root.querySelector('.pp-report');
+  report?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const holder = root.querySelector('.pp-report-form');
+    holder.innerHTML =
+      `<input type="number" step="0.1" min="50" max="400" value="${report.dataset.cents || ''}" placeholder="¢/L" aria-label="Price in cents per litre" />` +
+      `<button type="button">Save</button>` +
+      `<span class="when"> ${FUEL_LABELS[state.fuel]} at the pump, in ¢/L</span>`;
+    holder.querySelector('input').focus();
+    holder.querySelector('button').addEventListener('click', async () => {
+      const cents = Number(holder.querySelector('input').value);
+      if (!(cents >= 50 && cents <= 400)) { showError('Enter the pump price in ¢/L (e.g. 158.9)'); return; }
+      try {
+        const r = await fetch('/api/reports', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ stationId: report.dataset.sid, fuel: state.fuel, cents }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'report failed');
+        map.closePopup();
+        showInfo(`Thanks — ${FUEL_LABELS[state.fuel]} updated to ${cents}¢ for the next 24 h.`);
+        load();
+      } catch (err) {
+        showError('Could not save the report: ' + err.message);
+      }
+    });
   });
 });
 
@@ -1291,8 +1434,11 @@ function makeCard(s, { tier, best, priced }) {
   const loyaltyNote = off > 0
     ? `<div class="loyalty-note">−${off}¢ ${esc(brandLabel(s.name))} · pump ${priceText(p.cents)}</div>`
     : '';
+  const ageLabel = priced && p.reported
+    ? `✏️ reported ${ago(p.updated)}${p.mine ? ' by you' : ''}`
+    : priced ? ago(p.updated) : '';
   const price = priced
-    ? `${best ? '<span class="best-chip">Best price</span>' : ''}<div class="price-big t-${tier}">${priceHtml}</div><div class="price-age">${ago(p.updated)}</div>${loyaltyNote}${delta}`
+    ? `${best ? '<span class="best-chip">Best price</span>' : ''}<div class="price-big t-${tier}">${priceHtml}</div><div class="price-age">${ageLabel}</div>${loyaltyNote}${delta}`
     : `<div class="price-big">${fmtPrice(null)}</div><div class="price-age">no ${FUEL_LABELS[state.fuel].toLowerCase()} price</div>`;
   const domain = brandDomain(s.name);
   const badge = domain

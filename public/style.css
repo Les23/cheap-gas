@@ -357,7 +357,29 @@ button, input, select { font: inherit; color: inherit; }
 .place-del { color: var(--muted); font-size: 10px; }
 .place-del:hover { color: #ef4444; }
 
-.gas-popup .pp-share { margin-left: 12px; }
+.gas-popup .pp-share, .gas-popup .pp-report { margin-left: 12px; }
+.pp-report-form { margin-top: 6px; display: flex; align-items: center; gap: 6px; }
+.pp-report-form:empty { display: none; }
+.pp-report-form input {
+  width: 76px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.pp-report-form button {
+  padding: 5px 11px;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent-strong);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
 
 .closed-chip {
   display: inline-block;
@@ -740,6 +762,20 @@ button, input, select { font: inherit; color: inherit; }
 }
 .link-panel input:focus { outline: none; border-color: var(--accent); }
 .link-panel .ctl { margin-top: 6px; }
+
+/* ---------- insights ---------- */
+.insights-body { padding-top: 8px; }
+.ins-h { margin: 14px 0 8px; font-size: 13px; font-weight: 750; }
+.ins-h:first-child { margin-top: 4px; }
+.ins-chart { width: 100%; height: auto; display: block; background: var(--bg); border-radius: 10px; border: 1px solid var(--border); }
+.ins-chart-labels { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+.ins-legend { font-size: 11px; color: var(--muted); margin-top: 5px; }
+.ins-dot { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.ins-dot-dash { background: var(--muted); }
+.ins-big { font-size: 26px; font-weight: 800; letter-spacing: -.01em; }
+.ins-note { font-size: 12px; color: var(--muted); margin: 4px 0 0; line-height: 1.55; }
+.ins-bar-label { font-size: 9px; fill: var(--muted); }
+.ins-bar-value { font-size: 9px; font-weight: 700; fill: var(--text); }
 
 .settings-about {
   margin: 4px 0 0;

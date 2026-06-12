@@ -205,6 +205,10 @@
           <button id="logbook-btn" class="chip">Open logbook</button>
         </div>
         <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Savings &amp; insights</span><span class="setting-desc">Price trends and what CheapGas saves you</span></div>
+          <button id="insights-btn" class="chip">Open insights</button>
+        </div>
+        <div class="setting-row">
           <div class="setting-info"><span class="setting-name">Hide closed stations</span><span class="setting-desc">Skip stations that are closed right now</span></div>
           <button id="toggle-closed" class="switch" role="switch" aria-checked="false" aria-label="Hide closed stations"><span class="knob"></span></button>
         </div>
@@ -245,6 +249,18 @@
           <button id="log-export" class="link-btn">Export CSV</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="insights-overlay" class="settings-overlay" hidden>
+    <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="insights-title">
+      <div class="settings-head">
+        <h2 id="insights-title">📊 Savings &amp; insights</h2>
+        <button id="insights-close" class="ctl ctl-icon" aria-label="Close insights">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div id="insights-body" class="settings-body insights-body">Loading…</div>
     </div>
   </div>
 

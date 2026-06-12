@@ -352,6 +352,7 @@ async function getStationsFor(lat, lng, radiusKm) {
       throw err;
     }
     cache.set(key, { at: Date.now(), stations });
+    void recordAreaHistory(lat, lng, stations); // fire-and-forget daily summary
     return { stations, source: 'google', at: Date.now(), stale: false };
   } catch (e) {
     if (e.status) throw e;
@@ -363,7 +364,39 @@ async function getStationsFor(lat, lng, radiusKm) {
   }
 }
 
-async function handleStations(res, params) {
+// Attach fresh (<24 h) user price reports to a station list. Quietly does
+// nothing until the price_reports table exists.
+async function embedReports(stations, req) {
+  if (!db || !stations.length) return;
+  try {
+    const uid = await authUser(req).catch(() => null);
+    const ids = stations.map((s) => s.id);
+    const rows = await q(
+      `SELECT station_id, fuel, cents, user_id, reported_at FROM price_reports
+       WHERE reported_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+         AND station_id IN (${ids.map(() => '?').join(',')})`,
+      ids
+    );
+    if (!rows.length) return;
+    const byStation = new Map();
+    for (const r of rows) {
+      if (!byStation.has(r.station_id)) byStation.set(r.station_id, {});
+      byStation.get(r.station_id)[r.fuel] = {
+        cents: Number(r.cents),
+        at: new Date(r.reported_at).toISOString(),
+        mine: uid != null && r.user_id === uid,
+      };
+    }
+    for (const s of stations) {
+      const rep = byStation.get(s.id);
+      if (rep) s.reports = rep;
+    }
+  } catch (e) {
+    if (e.code !== 'ER_NO_SUCH_TABLE') console.warn('report embed failed:', e.message);
+  }
+}
+
+async function handleStations(req, res, params) {
   const lat = Number(params.get('lat'));
   const lng = Number(params.get('lng'));
   let radiusKm = Number(params.get('radiusKm') || 10);
@@ -377,6 +410,7 @@ async function handleStations(res, params) {
       .map((s) => ({ ...s, distanceKm: +haversineKm(lat, lng, s.lat, s.lng).toFixed(2) }))
       .filter((s) => s.distanceKm <= radiusKm + 2)
       .sort((a, b) => a.distanceKm - b.distanceKm);
+    await embedReports(withDist, req);
     sendJson(res, 200, {
       stations: withDist,
       source: r.source,
@@ -557,6 +591,81 @@ async function handleLogbookGet(req, res) {
       odo: r.odo == null ? null : Number(r.odo),
     })),
   });
+}
+
+// Daily area price summaries (~11 km tiles) — powers history charts and the
+// savings tracker. Recorded automatically whenever fresh prices arrive.
+function areaKey(lat, lng) {
+  return `${(Math.round(lat * 10) / 10).toFixed(1)},${(Math.round(lng * 10) / 10).toFixed(1)}`;
+}
+
+async function recordAreaHistory(lat, lng, stations) {
+  if (!db) return;
+  const area = areaKey(lat, lng);
+  const d = new Date().toISOString().slice(0, 10);
+  for (const fuel of FUELS) {
+    const cents = stations.map((s) => s.prices[fuel]?.cents).filter((c) => c > 0);
+    if (!cents.length) continue;
+    const cheap = Math.min(...cents);
+    const avg = +(cents.reduce((a, b) => a + b, 0) / cents.length).toFixed(1);
+    try {
+      await q(
+        `INSERT INTO price_history (area, d, fuel, cheap, avg) VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE cheap = LEAST(cheap, VALUES(cheap)), avg = VALUES(avg)`,
+        [area, d, fuel, cheap, avg]
+      );
+    } catch (e) {
+      if (e.code !== 'ER_NO_SUCH_TABLE') console.warn('history record failed:', e.message);
+      return;
+    }
+  }
+}
+
+async function handleHistory(res, params) {
+  if (!db) return sendJson(res, 200, { history: [] });
+  const lat = Number(params.get('lat'));
+  const lng = Number(params.get('lng'));
+  const fuel = FUELS.includes(params.get('fuel')) ? params.get('fuel') : 'regular';
+  const days = Math.min(120, Math.max(7, Number(params.get('days')) || 30));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return sendJson(res, 400, { error: 'lat/lng required' });
+  try {
+    const rows = await q(
+      `SELECT d, cheap, avg FROM price_history
+       WHERE area = ? AND fuel = ? AND d >= DATE_FORMAT(DATE_SUB(NOW(), INTERVAL ? DAY), '%Y-%m-%d')
+       ORDER BY d`,
+      [areaKey(lat, lng), fuel, days]
+    );
+    sendJson(res, 200, { history: rows.map((r) => ({ d: r.d, cheap: Number(r.cheap), avg: Number(r.avg) })) });
+  } catch (e) {
+    if (e.code === 'ER_NO_SUCH_TABLE') return sendJson(res, 200, { history: [] });
+    throw e;
+  }
+}
+
+async function handleReportPost(req, res) {
+  const uid = await authUser(req);
+  if (!uid) return sendJson(res, 401, { error: 'invalid credentials' });
+  const b = await readBody(req);
+  const stationId = String(b.stationId || '').slice(0, 100);
+  const fuel = FUELS.includes(b.fuel) ? b.fuel : null;
+  const cents = Number(b.cents);
+  if (!stationId || !fuel || !(cents >= 50 && cents <= 400)) {
+    return sendJson(res, 400, { error: 'stationId, fuel and a sensible cents value are required' });
+  }
+  try {
+    await q(
+      `INSERT INTO price_reports (station_id, fuel, cents, user_id, reported_at)
+       VALUES (?, ?, ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE cents = VALUES(cents), user_id = VALUES(user_id), reported_at = NOW()`,
+      [stationId, fuel, cents, uid]
+    );
+    sendJson(res, 200, { ok: true });
+  } catch (e) {
+    if (e.code === 'ER_NO_SUCH_TABLE') {
+      return sendJson(res, 503, { error: 'price reports need the v3 tables — run setup-db-v3.local.sql on the database' });
+    }
+    throw e;
+  }
 }
 
 async function handleLogbookPut(req, res) {
@@ -752,7 +861,12 @@ function serveStatic(res, urlPath) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
-    if (url.pathname === '/api/stations') return await handleStations(res, url.searchParams);
+    if (url.pathname === '/api/stations') return await handleStations(req, res, url.searchParams);
+    if (url.pathname === '/api/history') return await handleHistory(res, url.searchParams);
+    if (url.pathname === '/api/reports' && req.method === 'POST') {
+      if (!db) return sendJson(res, 503, { error: 'reports need the sync database' });
+      return await handleReportPost(req, res);
+    }
     if (url.pathname === '/api/geocode') return await handleGeocode(res, url.searchParams);
     if (url.pathname === '/api/iplocate') return await handleIpLocate(req, res);
     if (url.pathname === '/api/route') return await handleRoute(res, url.searchParams);
