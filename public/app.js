@@ -46,6 +46,10 @@ const els = {
   statAvg: document.getElementById('stat-avg'),
   statHigh: document.getElementById('stat-high'),
   skeletons: document.getElementById('skeletons'),
+  syncStatus: document.getElementById('sync-status'),
+  linkShowBtn: document.getElementById('link-show-btn'),
+  linkEnterBtn: document.getElementById('link-enter-btn'),
+  linkPanel: document.getElementById('link-panel'),
   alertCents: document.getElementById('alert-cents'),
   toggleAlert: document.getElementById('toggle-alert'),
   econInput: document.getElementById('econ-input'),
@@ -80,7 +84,10 @@ const els = {
 function loadState() {
   try { return JSON.parse(localStorage.getItem('cheapgas-state')); } catch { return null; }
 }
-function saveState() { localStorage.setItem('cheapgas-state', JSON.stringify(state)); }
+function saveState() {
+  localStorage.setItem('cheapgas-state', JSON.stringify(state));
+  schedulePushState(); // mirror to the cloud account (no-op when sync is off)
+}
 
 let state = loadState() || {};
 state = {
@@ -428,6 +435,10 @@ function syncSettingsUI() {
   els.alertCents.value = state.settings.alertCents;
   els.toggleAlert.setAttribute('aria-checked', String(state.settings.alertOn));
 
+  if (syncAvailable === false) els.syncStatus.textContent = 'This device only — server has no sync database';
+  else if (auth) els.syncStatus.textContent = `Synced · account …${auth.id.slice(-6)} · no sign-up needed`;
+  else els.syncStatus.textContent = 'Connecting…';
+
   let about = 'CheapGas · prices via Google Places · map © OpenStreetMap · CARTO · Esri';
   if (lastResponse?.mock) about += ' · running on sample data';
   else if (lastResponse) about += ` · API calls today ${lastResponse.budget.used}/${lastResponse.budget.limit}`;
@@ -443,6 +454,184 @@ els.fillInput.addEventListener('change', () => {
   saveState(); syncSettingsUI(); render();
 });
 
+// ------------------------------------------------------------------ accounts & sync
+// Zen-Garden style: an anonymous account is created silently on first run;
+// favourites/settings/logbook sync through it. No registration, ever.
+let auth = null; // { id, token }
+let syncAvailable = null; // null = unknown, false = server has no DB
+let pushStateTimer = null;
+let pushLogTimer = null;
+
+function loadAuth() {
+  try { return JSON.parse(localStorage.getItem('cheapgas-auth')); } catch { return null; }
+}
+function saveAuth() { localStorage.setItem('cheapgas-auth', JSON.stringify(auth)); }
+
+function authHeaders() {
+  return auth ? { 'X-User-Id': auth.id, Authorization: `Bearer ${auth.token}` } : {};
+}
+
+async function ensureAccount() {
+  if (syncAvailable === false) return false;
+  auth = auth || loadAuth();
+  if (auth) {
+    const r = await fetch('/api/auth/me', { headers: authHeaders() }).catch(() => null);
+    if (r?.ok) { syncAvailable = true; return true; }
+    if (r?.status === 503) { syncAvailable = false; return false; }
+    auth = null; // token rejected (e.g. server reset) — start a fresh account
+  }
+  const r = await fetch('/api/auth/anon', { method: 'POST' }).catch(() => null);
+  if (!r?.ok) { syncAvailable = r?.status === 503 ? false : syncAvailable; return false; }
+  auth = await r.json();
+  saveAuth();
+  syncAvailable = true;
+  return true;
+}
+
+function syncedSettingsPayload() {
+  return { ...state.settings, _fuel: state.fuel, _radiusKm: state.radiusKm };
+}
+
+function applySyncedState(cloud) {
+  if (!cloud) return;
+  const s = { ...cloud.settings };
+  const fuel = s._fuel; const radius = s._radiusKm;
+  delete s._fuel; delete s._radiusKm;
+  state.settings = { ...DEFAULT_SETTINGS, ...s };
+  if (FUEL_LABELS[fuel]) state.fuel = fuel;
+  if ([5, 10, 25, 50].includes(Number(radius))) state.radiusKm = Number(radius);
+  state.favorites = Array.isArray(cloud.favorites) ? cloud.favorites : [];
+  state.brands = Array.isArray(cloud.brands) ? cloud.brands : [];
+  localStorage.setItem('cheapgas-state', JSON.stringify(state)); // save without re-queueing a push
+  els.fuel.value = state.fuel;
+  els.radius.value = String(state.radiusKm);
+  showUnpriced = state.settings.showUnpricedDefault;
+  applyTheme();
+  restartAutoRefresh();
+  syncSettingsUI();
+}
+
+function schedulePushState() {
+  if (!auth || syncAvailable === false) return;
+  clearTimeout(pushStateTimer);
+  pushStateTimer = setTimeout(() => {
+    fetch('/api/sync/state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        favorites: state.favorites,
+        brands: state.brands,
+        settings: syncedSettingsPayload(),
+        updatedAt: Date.now(),
+      }),
+    }).catch(() => {});
+  }, 1500);
+}
+
+function schedulePushLogbook() {
+  if (!auth || syncAvailable === false) return;
+  clearTimeout(pushLogTimer);
+  pushLogTimer = setTimeout(() => {
+    fetch('/api/sync/logbook', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ entries: loadLog() }),
+    }).catch(() => {});
+  }, 1500);
+}
+
+async function initialSync() {
+  const ok = await ensureAccount();
+  syncSettingsUI();
+  if (!ok) return;
+  try {
+    const r = await fetch('/api/sync/state', { headers: authHeaders() });
+    if (r.ok) {
+      const { state: cloud } = await r.json();
+      if (cloud) { applySyncedState(cloud); render(); }
+      else schedulePushState(); // first device on this account — seed the cloud
+    }
+    const lr = await fetch('/api/sync/logbook', { headers: authHeaders() });
+    if (lr.ok) {
+      const { entries } = await lr.json();
+      const local = loadLog();
+      const byTs = new Map([...entries, ...local].map((f) => [f.ts, f]));
+      const merged = [...byTs.values()];
+      if (merged.length !== entries.length || merged.length !== local.length) {
+        saveLog(merged);
+        schedulePushLogbook();
+      }
+    }
+  } catch { /* offline — local data still works */ }
+}
+
+async function adoptAccount(newAuth) {
+  auth = newAuth;
+  saveAuth();
+  syncAvailable = true;
+  try {
+    const r = await fetch('/api/sync/state', { headers: authHeaders() });
+    if (r.ok) {
+      const { state: cloud } = await r.json();
+      if (cloud) applySyncedState(cloud);
+      else schedulePushState();
+    }
+    const lr = await fetch('/api/sync/logbook', { headers: authHeaders() });
+    if (lr.ok) {
+      const { entries } = await lr.json();
+      const byTs = new Map([...loadLog(), ...entries].map((f) => [f.ts, f]));
+      saveLog([...byTs.values()]);
+      schedulePushLogbook();
+    }
+  } catch { /* will sync next open */ }
+  ensureSubscribed(); // re-attach any push alert to the adopted account
+  render();
+  syncSettingsUI();
+}
+
+// ---- link-device UI
+els.linkShowBtn.addEventListener('click', async () => {
+  els.linkPanel.hidden = false;
+  els.linkPanel.textContent = 'Getting a code…';
+  try {
+    if (!(await ensureAccount())) throw new Error('sync is not available on this server');
+    const r = await fetch('/api/auth/linkcode', { method: 'POST', headers: authHeaders() });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'could not get a code');
+    els.linkPanel.innerHTML =
+      `On your other device: Settings → <strong>I have a code</strong> → enter` +
+      `<span class="big-code">${data.code}</span>` +
+      `<span class="link-note">Valid for ${data.expiresMin} minutes · linking shares your stars, logbook & settings</span>`;
+  } catch (e) {
+    els.linkPanel.textContent = 'Could not get a code: ' + e.message;
+  }
+});
+
+els.linkEnterBtn.addEventListener('click', () => {
+  els.linkPanel.hidden = false;
+  els.linkPanel.innerHTML =
+    `Enter the 6-digit code shown on your other device:` +
+    `<input id="link-code-input" type="text" inputmode="numeric" maxlength="6" placeholder="······" />` +
+    `<br/><button id="link-code-go" class="ctl ctl-primary">Link this device</button>` +
+    `<div class="link-note" style="margin-top:6px">This device will join that account (its current data merges in)</div>`;
+  document.getElementById('link-code-go').addEventListener('click', async () => {
+    const code = document.getElementById('link-code-input').value.trim();
+    try {
+      const r = await fetch('/api/auth/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'invalid code');
+      await adoptAccount({ id: data.id, token: data.token });
+      els.linkPanel.innerHTML = `<strong>✓ Linked!</strong><div class="link-note">This device now shares the account — stars, logbook and settings are synced.</div>`;
+    } catch (e) {
+      showError('Linking failed: ' + e.message);
+    }
+  });
+});
+
 // ------------------------------------------------------------------ push alerts
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
@@ -455,7 +644,7 @@ function urlB64ToUint8Array(b64) {
 async function postSubscription(sub) {
   await fetch('/api/push/subscribe', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
       subscription: sub.toJSON(),
       fuel: state.fuel,
@@ -534,7 +723,10 @@ setTimeout(ensureSubscribed, 8000); // after boot + first locate
 function loadLog() {
   try { return JSON.parse(localStorage.getItem('cheapgas-logbook')) || []; } catch { return []; }
 }
-function saveLog(arr) { localStorage.setItem('cheapgas-logbook', JSON.stringify(arr)); }
+function saveLog(arr) {
+  localStorage.setItem('cheapgas-logbook', JSON.stringify(arr));
+  schedulePushLogbook();
+}
 
 function openLogbook() {
   const sel = refs.get(selectedId);
@@ -1219,6 +1411,7 @@ function render(recenter = false) {
 applyTheme();
 restartAutoRefresh();
 syncSettingsUI();
+initialSync(); // anonymous account + cloud pull (runs in the background)
 
 if (state.center) {
   els.input.value = state.follow ? '' : state.center.label;

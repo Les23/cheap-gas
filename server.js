@@ -11,6 +11,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,6 +32,12 @@ function loadConfig() {
     cacheMinutes: Number(fileCfg.cacheMinutes ?? 30),
     vapidPublicKey: process.env.VAPID_PUBLIC_KEY || fileCfg.vapidPublicKey || '',
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || fileCfg.vapidPrivateKey || '',
+    dbHost: process.env.DB_HOST || fileCfg.dbHost || '',
+    dbPort: Number(process.env.DB_PORT || fileCfg.dbPort || 3306),
+    dbUser: process.env.DB_USER || fileCfg.dbUser || 'cheapgas',
+    dbPassword: process.env.DB_PASSWORD || fileCfg.dbPassword || '',
+    dbName: process.env.DB_NAME || fileCfg.dbName || 'cheapgas',
+    authSecret: process.env.AUTH_SECRET || fileCfg.authSecret || '',
   };
 }
 const cfg = loadConfig();
@@ -412,6 +419,163 @@ async function handleGeocode(res, params) {
   }
 }
 
+// ---------------------------------------------------------------- database (accounts + sync)
+// MariaDB/MySQL via mysql2. Without DB config the server runs fine and the
+// account/sync endpoints report "disabled" — the app then works device-local.
+let db = null;
+if (cfg.dbHost && cfg.dbPassword && cfg.authSecret) {
+  try {
+    const mysql = await import('mysql2/promise');
+    const createPool = mysql.createPool || mysql.default?.createPool;
+    db = createPool({
+      host: cfg.dbHost,
+      port: cfg.dbPort,
+      user: cfg.dbUser,
+      password: cfg.dbPassword,
+      database: cfg.dbName,
+      waitForConnections: true,
+      connectionLimit: 5,
+      connectTimeout: 8000,
+    });
+    await db.query('SELECT 1');
+    console.log(`   Database connected: ${cfg.dbUser}@${cfg.dbHost}/${cfg.dbName} — accounts & sync enabled.`);
+  } catch (e) {
+    console.warn(`   Database unavailable (${e.message}) — running without accounts/sync.`);
+    db = null;
+  }
+} else {
+  console.log('   No database configured — running without accounts/sync.');
+}
+
+async function q(sql, params = []) {
+  const [rows] = await db.execute(sql, params);
+  return rows;
+}
+
+// Stateless device tokens: token = HMAC(authSecret, userId). Any device that
+// holds {id, token} is signed in; redeem link codes re-derive the same token.
+function tokenFor(id) {
+  return crypto.createHmac('sha256', cfg.authSecret).update(id).digest('hex');
+}
+
+async function authUser(req) {
+  const id = req.headers['x-user-id'];
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (!id || !token || token.length !== 64) return null;
+  const expected = tokenFor(String(id));
+  if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(token))) return null;
+  const rows = await q('SELECT id FROM users WHERE id = ?', [id]);
+  return rows.length ? String(id) : null;
+}
+
+async function handleAuthAnon(res) {
+  const id = crypto.randomUUID();
+  await q('INSERT INTO users (id, token_hash) VALUES (?, ?)', [id, '']);
+  sendJson(res, 200, { id, token: tokenFor(id) });
+}
+
+async function handleAuthMe(req, res) {
+  const uid = await authUser(req);
+  if (!uid) return sendJson(res, 401, { error: 'invalid credentials' });
+  sendJson(res, 200, { id: uid });
+}
+
+async function handleLinkCode(req, res) {
+  const uid = await authUser(req);
+  if (!uid) return sendJson(res, 401, { error: 'invalid credentials' });
+  await q('DELETE FROM link_codes WHERE user_id = ? OR expires_at < NOW()', [uid]);
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code = String(crypto.randomInt(100000, 1000000));
+    try {
+      await q('INSERT INTO link_codes (code, user_id, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))', [code, uid]);
+      break;
+    } catch { code = ''; }
+  }
+  if (!code) return sendJson(res, 500, { error: 'could not allocate a code, try again' });
+  sendJson(res, 200, { code, expiresMin: 10 });
+}
+
+async function handleRedeem(req, res) {
+  const b = await readBody(req);
+  const code = String(b.code || '').trim();
+  if (!/^\d{6}$/.test(code)) return sendJson(res, 400, { error: 'enter the 6-digit code' });
+  const rows = await q('SELECT user_id FROM link_codes WHERE code = ? AND expires_at > NOW()', [code]);
+  if (!rows.length) return sendJson(res, 404, { error: 'code not found or expired — generate a fresh one' });
+  const uid = String(rows[0].user_id);
+  await q('DELETE FROM link_codes WHERE code = ?', [code]);
+  sendJson(res, 200, { id: uid, token: tokenFor(uid) });
+}
+
+async function handleStateGet(req, res) {
+  const uid = await authUser(req);
+  if (!uid) return sendJson(res, 401, { error: 'invalid credentials' });
+  const rows = await q('SELECT favorites, settings, brands, updated_at FROM user_state WHERE user_id = ?', [uid]);
+  if (!rows.length) return sendJson(res, 200, { state: null });
+  const r = rows[0];
+  sendJson(res, 200, {
+    state: {
+      favorites: JSON.parse(r.favorites),
+      settings: JSON.parse(r.settings),
+      brands: JSON.parse(r.brands),
+      updatedAt: Number(r.updated_at),
+    },
+  });
+}
+
+async function handleStatePut(req, res) {
+  const uid = await authUser(req);
+  if (!uid) return sendJson(res, 401, { error: 'invalid credentials' });
+  const b = await readBody(req);
+  const updatedAt = Number(b.updatedAt) || Date.now();
+  const favorites = JSON.stringify(b.favorites ?? []);
+  const settings = JSON.stringify(b.settings ?? {});
+  const brands = JSON.stringify(b.brands ?? []);
+  await q(
+    `INSERT INTO user_state (user_id, favorites, settings, brands, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       favorites = IF(VALUES(updated_at) >= updated_at, VALUES(favorites), favorites),
+       settings  = IF(VALUES(updated_at) >= updated_at, VALUES(settings), settings),
+       brands    = IF(VALUES(updated_at) >= updated_at, VALUES(brands), brands),
+       updated_at = GREATEST(updated_at, VALUES(updated_at))`,
+    [uid, favorites, settings, brands, updatedAt]
+  );
+  await q('UPDATE users SET last_seen = NOW() WHERE id = ?', [uid]);
+  sendJson(res, 200, { ok: true });
+}
+
+async function handleLogbookGet(req, res) {
+  const uid = await authUser(req);
+  if (!uid) return sendJson(res, 401, { error: 'invalid credentials' });
+  const rows = await q('SELECT ts, d, station, litres, cents, odo FROM logbook WHERE user_id = ? ORDER BY ts', [uid]);
+  sendJson(res, 200, {
+    entries: rows.map((r) => ({
+      ts: Number(r.ts), d: r.d, station: r.station,
+      litres: Number(r.litres), cents: Number(r.cents),
+      odo: r.odo == null ? null : Number(r.odo),
+    })),
+  });
+}
+
+async function handleLogbookPut(req, res) {
+  const uid = await authUser(req);
+  if (!uid) return sendJson(res, 401, { error: 'invalid credentials' });
+  const b = await readBody(req);
+  const entries = Array.isArray(b.entries) ? b.entries.slice(0, 500) : [];
+  await q('DELETE FROM logbook WHERE user_id = ?', [uid]);
+  for (const f of entries) {
+    if (!(Number(f.litres) > 0) || !(Number(f.cents) > 0)) continue;
+    await q(
+      'INSERT INTO logbook (user_id, ts, d, station, litres, cents, odo) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [uid, Number(f.ts) || Date.now(), String(f.d).slice(0, 10), String(f.station).slice(0, 120),
+        Number(f.litres), Number(f.cents), f.odo == null ? null : Number(f.odo)]
+    );
+  }
+  sendJson(res, 200, { ok: true, count: entries.length });
+}
+
 // ---------------------------------------------------------------- push alerts
 // Requires the web-push package and VAPID keys (env vars or config.json).
 // Without them the server runs fine and alert endpoints report "disabled".
@@ -467,6 +631,18 @@ async function handleSubscribe(req, res) {
     radiusKm: Math.min(25, Math.max(2, Number(b.radiusKm) || 10)),
     lastNotified: subs.find((s) => s.endpoint === sub.endpoint)?.lastNotified || null,
   };
+  if (db) {
+    const uid = await authUser(req); // subscriptions belong to the account when sync is on
+    if (!uid) return sendJson(res, 401, { error: 'sign-in required for alerts (refresh the app once)' });
+    await q(
+      `INSERT INTO push_subs (endpoint, user_id, keys_json, fuel, threshold_cents, lat, lng, radius_km, last_notified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+       ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), keys_json = VALUES(keys_json), fuel = VALUES(fuel),
+         threshold_cents = VALUES(threshold_cents), lat = VALUES(lat), lng = VALUES(lng), radius_km = VALUES(radius_km)`,
+      [entry.endpoint.slice(0, 500), uid, JSON.stringify(entry.keys), entry.fuel, entry.thresholdCents, entry.lat, entry.lng, entry.radiusKm]
+    );
+    return sendJson(res, 200, { ok: true, stored: 'db' });
+  }
   subs = subs.filter((s) => s.endpoint !== entry.endpoint);
   subs.push(entry);
   saveSubs();
@@ -475,6 +651,10 @@ async function handleSubscribe(req, res) {
 
 async function handleUnsubscribe(req, res) {
   const b = await readBody(req);
+  if (db) {
+    await q('DELETE FROM push_subs WHERE endpoint = ?', [String(b.endpoint || '').slice(0, 500)]);
+    return sendJson(res, 200, { ok: true });
+  }
   subs = subs.filter((s) => s.endpoint !== b.endpoint);
   saveSubs();
   sendJson(res, 200, { ok: true });
@@ -489,8 +669,22 @@ async function handleAlertsRun(res) {
     return sendJson(res, 200, { ok: true, skipped: 'ran recently', subs: subs.length });
   }
   lastAlertsRun = Date.now();
+  let pool = subs;
+  if (db) {
+    const rows = await q('SELECT endpoint, keys_json, fuel, threshold_cents, lat, lng, radius_km, last_notified FROM push_subs');
+    pool = rows.map((r) => ({
+      endpoint: r.endpoint,
+      keys: JSON.parse(r.keys_json),
+      fuel: r.fuel,
+      thresholdCents: Number(r.threshold_cents),
+      lat: Number(r.lat),
+      lng: Number(r.lng),
+      radiusKm: Number(r.radius_km),
+      lastNotified: r.last_notified,
+    }));
+  }
   let sent = 0, dropped = 0, checked = 0;
-  for (const sub of [...subs]) {
+  for (const sub of [...pool]) {
     try {
       const r = await getStationsFor(sub.lat, sub.lng, sub.radiusKm);
       checked++;
@@ -508,10 +702,12 @@ async function handleAlertsRun(res) {
           url: '/',
         }));
         sub.lastNotified = today;
+        if (db) await q('UPDATE push_subs SET last_notified = ? WHERE endpoint = ?', [today, sub.endpoint]);
         sent++;
       }
     } catch (e) {
       if (e.statusCode === 404 || e.statusCode === 410) {
+        if (db) await q('DELETE FROM push_subs WHERE endpoint = ?', [sub.endpoint]).catch(() => {});
         subs = subs.filter((s) => s.endpoint !== sub.endpoint);
         dropped++;
       } else {
@@ -519,8 +715,9 @@ async function handleAlertsRun(res) {
       }
     }
   }
-  saveSubs();
-  sendJson(res, 200, { ok: true, subs: subs.length, checked, sent, dropped });
+  if (!db) saveSubs();
+  const total = db ? (await q('SELECT COUNT(*) AS n FROM push_subs'))[0].n : subs.length;
+  sendJson(res, 200, { ok: true, subs: Number(total), checked, sent, dropped });
 }
 
 // ---------------------------------------------------------------- static files
@@ -565,11 +762,23 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/push/subscribe' && req.method === 'POST') return await handleSubscribe(req, res);
     if (url.pathname === '/api/push/unsubscribe' && req.method === 'POST') return await handleUnsubscribe(req, res);
     if (url.pathname === '/api/alerts/run') return await handleAlertsRun(res);
+    if (url.pathname.startsWith('/api/auth/') || url.pathname.startsWith('/api/sync/')) {
+      if (!db) return sendJson(res, 503, { error: 'sync is not configured on this server' });
+      if (url.pathname === '/api/auth/anon' && req.method === 'POST') return await handleAuthAnon(res);
+      if (url.pathname === '/api/auth/me') return await handleAuthMe(req, res);
+      if (url.pathname === '/api/auth/linkcode' && req.method === 'POST') return await handleLinkCode(req, res);
+      if (url.pathname === '/api/auth/redeem' && req.method === 'POST') return await handleRedeem(req, res);
+      if (url.pathname === '/api/sync/state' && req.method === 'GET') return await handleStateGet(req, res);
+      if (url.pathname === '/api/sync/state' && req.method === 'PUT') return await handleStatePut(req, res);
+      if (url.pathname === '/api/sync/logbook' && req.method === 'GET') return await handleLogbookGet(req, res);
+      if (url.pathname === '/api/sync/logbook' && req.method === 'PUT') return await handleLogbookPut(req, res);
+    }
     if (url.pathname === '/api/health') {
       return sendJson(res, 200, {
         ok: true,
         mock: MOCK,
         alerts: ALERTS,
+        sync: Boolean(db),
         subs: subs.length,
         budget: { used: usage.calls, limit: cfg.maxGoogleCallsPerDay },
       });

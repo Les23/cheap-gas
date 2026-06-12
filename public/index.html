@@ -163,6 +163,17 @@
             <button data-value="0">Off</button><button data-value="5">5m</button><button data-value="10">10m</button><button data-value="20">20m</button>
           </div>
         </div>
+        <div class="setting-row sync-row">
+          <div class="setting-info">
+            <span class="setting-name">Account &amp; sync</span>
+            <span class="setting-desc" id="sync-status">Checking…</span>
+          </div>
+          <div class="sync-actions">
+            <button id="link-show-btn" class="chip">Link another device</button>
+            <button id="link-enter-btn" class="chip">I have a code</button>
+          </div>
+        </div>
+        <div id="link-panel" class="link-panel" hidden></div>
         <div class="setting-row">
           <div class="setting-info"><span class="setting-name">Price alert</span><span class="setting-desc">Notify me when fuel near me drops to my target</span></div>
           <div class="vehicle-fields">

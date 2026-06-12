@@ -134,6 +134,25 @@ your alert every time you open it, so in practice alerts keep working as long
 as you open the app now and then. You get at most one alert per day per
 device.
 
+## Accounts & cross-device sync (optional)
+
+Zen-Garden-style accounts: the app silently creates an anonymous account on
+first visit (random id + device token — no email, no password, no sign-up
+screen). Favourites, brand filter, settings, fill-up logbook, and price-alert
+subscriptions then sync through a MariaDB/MySQL database. To pair a phone:
+Settings → **Link another device** → enter the 6-digit code on the phone.
+
+Setup: run `setup-db.local.sql` against your database server once, then give
+the app these settings (config.json locally / environment variables on
+Render): `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and
+`AUTH_SECRET` (any long random hex string; tokens are derived from it, so
+changing it signs every device out). Without database config the app still
+works — data just stays per-device.
+
+Housekeeping tips: keep the database port firewalled to the app server's
+outbound IPs (Render lists three per service under "Connect") plus your own,
+and consider enabling TLS on MariaDB if the connection crosses the internet.
+
 ## Honest limitations
 
 - **Freshness:** Google's station prices typically update a few times per day

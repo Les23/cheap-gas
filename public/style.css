@@ -662,6 +662,42 @@ button, input, select { font: inherit; color: inherit; }
 .log-del:hover { color: #ef4444; }
 .log-foot { margin-top: 6px; }
 
+.sync-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+
+.link-panel {
+  padding: 12px;
+  margin: 4px 0 10px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  text-align: center;
+  font-size: 12.5px;
+}
+.link-panel .big-code {
+  display: block;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: .35em;
+  margin: 6px 0 4px;
+  color: var(--accent-strong);
+  font-variant-numeric: tabular-nums;
+}
+.link-panel .link-note { color: var(--muted); font-size: 11.5px; }
+.link-panel input {
+  width: 150px;
+  margin: 8px auto 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: .25em;
+}
+.link-panel input:focus { outline: none; border-color: var(--accent); }
+.link-panel .ctl { margin-top: 6px; }
+
 .settings-about {
   margin: 4px 0 0;
   padding-top: 12px;

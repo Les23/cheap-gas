@@ -3,6 +3,12 @@
   "port": 3000,
   "vapidPublicKey": "",
   "vapidPrivateKey": "",
+  "dbHost": "",
+  "dbPort": 3306,
+  "dbUser": "cheapgas",
+  "dbPassword": "",
+  "dbName": "cheapgas",
+  "authSecret": "",
   "maxGoogleCallsPerDay": 30,
   "cacheMinutes": 30
 }
