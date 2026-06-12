@@ -248,6 +248,39 @@ function mockStations(lat, lng, radiusKm, key) {
   return out;
 }
 
+// ---------------------------------------------------------------- routing
+// Proxy to the public OSRM demo router (fair-use). Returns the driving route
+// as [lat,lng] coords so the client can draw it and sample stations along it.
+const routeCache = new Map(); // key -> { at, data }
+
+async function handleRoute(res, params) {
+  const fLat = Number(params.get('fromLat')), fLng = Number(params.get('fromLng'));
+  const tLat = Number(params.get('toLat')), tLng = Number(params.get('toLng'));
+  if (![fLat, fLng, tLat, tLng].every(Number.isFinite)) {
+    return sendJson(res, 400, { error: 'fromLat, fromLng, toLat, toLng are required' });
+  }
+  const key = [fLat.toFixed(3), fLng.toFixed(3), tLat.toFixed(3), tLng.toFixed(3)].join(',');
+  const hit = routeCache.get(key);
+  if (hit && Date.now() - hit.at < 60 * 60e3) return sendJson(res, 200, hit.data);
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${fLng},${fLat};${tLng},${tLat}?overview=full&geometries=geojson&alternatives=false`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'cheap-gas-app/1.0 (personal use)' } });
+    const j = await r.json();
+    if (j.code !== 'Ok' || !j.routes?.length) throw new Error(j.message || j.code || 'no route found');
+    const rt = j.routes[0];
+    const data = {
+      distanceKm: +(rt.distance / 1000).toFixed(1),
+      durationMin: Math.round(rt.duration / 60),
+      coords: rt.geometry.coordinates.map((c) => [c[1], c[0]]),
+    };
+    if (routeCache.size > 50) routeCache.clear();
+    routeCache.set(key, { at: Date.now(), data });
+    sendJson(res, 200, data);
+  } catch (e) {
+    sendJson(res, 502, { error: `Routing failed: ${e.message}` });
+  }
+}
+
 // ---------------------------------------------------------------- IP geolocation
 // Fallback for when browser GPS is unavailable (e.g. phones on plain http://).
 // City-level accuracy. LAN/localhost clients resolve the server's own public
@@ -407,6 +440,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/stations') return await handleStations(res, url.searchParams);
     if (url.pathname === '/api/geocode') return await handleGeocode(res, url.searchParams);
     if (url.pathname === '/api/iplocate') return await handleIpLocate(req, res);
+    if (url.pathname === '/api/route') return await handleRoute(res, url.searchParams);
     if (url.pathname === '/api/health') {
       return sendJson(res, 200, {
         ok: true,

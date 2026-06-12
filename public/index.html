@@ -64,11 +64,26 @@
       <button id="refresh-btn" class="ctl ctl-icon" title="Refresh prices" aria-label="Refresh prices">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11A8 8 0 0 0 5.6 6.6L4 8.2M4 13a8 8 0 0 0 14.4 4.4l1.6-1.6M4 4v4.2h4.2M20 20v-4.2h-4.2"/></svg>
       </button>
+      <button id="route-btn" class="ctl ctl-icon" title="Cheapest gas along a route" aria-label="Route mode">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="19" r="2.2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8.2 19H15a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7.5M16.5 2l3 3-3 3"/></svg>
+      </button>
       <button id="settings-btn" class="ctl ctl-icon" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
     </div>
   </header>
+
+  <div id="route-bar" class="route-bar" hidden>
+    <span class="route-from">From <strong id="route-from-label">here</strong> to</span>
+    <div class="search-wrap route-search">
+      <input id="route-input" type="search" placeholder="Destination — city or address…" autocomplete="off" />
+      <ul id="route-results" class="search-results" hidden></ul>
+    </div>
+    <button id="route-go" class="ctl ctl-primary">Find gas</button>
+    <button id="route-exit" class="ctl ctl-icon" aria-label="Exit route mode">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
 
   <div id="mock-banner" class="banner warn" hidden>
     Sample data — add your free Google API key to see real prices (README.md has the steps).

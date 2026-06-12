@@ -59,6 +59,13 @@ const els = {
   logList: document.getElementById('log-list'),
   logTotal: document.getElementById('log-total'),
   logExport: document.getElementById('log-export'),
+  routeBtn: document.getElementById('route-btn'),
+  routeBar: document.getElementById('route-bar'),
+  routeFromLabel: document.getElementById('route-from-label'),
+  routeInput: document.getElementById('route-input'),
+  routeResults: document.getElementById('route-results'),
+  routeGo: document.getElementById('route-go'),
+  routeExit: document.getElementById('route-exit'),
   settingsBtn: document.getElementById('settings-btn'),
   settingsOverlay: document.getElementById('settings-overlay'),
   settingsClose: document.getElementById('settings-close'),
@@ -281,7 +288,10 @@ els.input.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.search-wrap')) els.results.hidden = true;
+  if (!e.target.closest('.search-wrap')) {
+    els.results.hidden = true;
+    els.routeResults.hidden = true;
+  }
 });
 
 async function geocode(q) {
@@ -330,7 +340,7 @@ els.refresh.addEventListener('click', () => {
   els.refresh.classList.remove('spin');
   void els.refresh.offsetWidth; // restart the animation
   els.refresh.classList.add('spin');
-  load();
+  if (routeMode) goRoute(); else load();
 });
 
 els.locate.addEventListener('click', () => locateAndSearch({ silent: false }));
@@ -339,7 +349,7 @@ els.showUnpriced.addEventListener('click', () => { showUnpriced = !showUnpriced;
 
 // “Search this area” appears when the map is panned away from the searched spot
 map.on('moveend', () => {
-  if (!state.center) return;
+  if (!state.center || routeMode) return;
   const c = map.getCenter();
   const moved = distKm(c.lat, c.lng, state.center.lat, state.center.lng);
   els.searchArea.hidden = moved < Math.max(2, state.radiusKm * 0.4);
@@ -587,8 +597,161 @@ async function locateAndSearch({ silent }) {
   }
 }
 
+// ------------------------------------------------------------------ route mode
+let routeMode = false;
+let route = null; // { label, distanceKm, durationMin, coords }
+let routeDest = null;
+const routeLayer = L.layerGroup().addTo(map);
+
+els.routeBtn.addEventListener('click', () => {
+  els.routeBar.hidden = !els.routeBar.hidden;
+  if (!els.routeBar.hidden) {
+    els.routeFromLabel.textContent = state.center ? state.center.label : 'your location';
+    els.routeInput.focus();
+  }
+});
+
+let routeSearchTimer = null;
+els.routeInput.addEventListener('input', () => {
+  clearTimeout(routeSearchTimer);
+  routeDest = null;
+  const q = els.routeInput.value.trim();
+  if (q.length < 3) { els.routeResults.hidden = true; return; }
+  routeSearchTimer = setTimeout(() => routeGeocode(q), 450);
+});
+els.routeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); els.routeGo.click(); }
+});
+
+async function routeGeocode(q, autopick = false) {
+  try {
+    const r = await fetch('/api/geocode?q=' + encodeURIComponent(q));
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'geocoding error');
+    if (autopick && data.results.length) {
+      pickDest(data.results[0]);
+      return;
+    }
+    els.routeResults.innerHTML = '';
+    for (const row of data.results) {
+      const li = document.createElement('li');
+      li.textContent = row.name;
+      li.addEventListener('click', () => pickDest(row));
+      els.routeResults.appendChild(li);
+    }
+    els.routeResults.hidden = data.results.length === 0;
+  } catch (e) {
+    showError('Destination search failed: ' + e.message);
+  }
+}
+
+function pickDest(row) {
+  routeDest = { lat: row.lat, lng: row.lng, label: shortName(row.name) };
+  els.routeInput.value = shortName(row.name);
+  els.routeResults.hidden = true;
+  goRoute();
+}
+
+els.routeGo.addEventListener('click', () => {
+  if (routeDest) goRoute();
+  else if (els.routeInput.value.trim().length >= 3) routeGeocode(els.routeInput.value.trim(), true);
+});
+
+els.routeExit.addEventListener('click', exitRoute);
+
+function exitRoute() {
+  routeMode = false;
+  route = null;
+  routeDest = null;
+  els.routeBar.hidden = true;
+  els.routeInput.value = '';
+  routeLayer.clearLayers();
+  load();
+}
+
+// Evenly spaced sample points along the polyline — each costs one API call,
+// so wide spacing + the server cache keep route searches inside the budget.
+function samplesAlong(coords, totalKm) {
+  const n = Math.min(6, Math.max(2, Math.round(totalKm / 40)));
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) {
+    cum.push(cum[i - 1] + distKm(coords[i - 1][0], coords[i - 1][1], coords[i][0], coords[i][1]));
+  }
+  const total = cum[cum.length - 1];
+  const pts = [];
+  for (let k = 1; k <= n; k++) {
+    const target = (total * k) / (n + 1);
+    let idx = cum.findIndex((c) => c >= target);
+    if (idx < 0) idx = cum.length - 1;
+    pts.push({ lat: coords[idx][0], lng: coords[idx][1], routeKm: Math.round(target) });
+  }
+  return pts;
+}
+
+async function goRoute() {
+  if (!state.center) { showError('Set a starting point first (search or “Near me”).'); return; }
+  if (!routeDest) return;
+  hideError();
+  els.meta.textContent = `Routing to ${routeDest.label}…`;
+  setLoading(true);
+  try {
+    const { lat, lng } = state.center;
+    const r = await fetch(`/api/route?fromLat=${lat}&fromLng=${lng}&toLat=${routeDest.lat}&toLng=${routeDest.lng}`);
+    const rt = await r.json();
+    if (!r.ok) throw new Error(rt.error || `HTTP ${r.status}`);
+
+    els.meta.textContent = `Checking prices along ${rt.distanceKm} km of road…`;
+    const pts = samplesAlong(rt.coords, rt.distanceKm);
+    const results = await Promise.all(pts.map((p) =>
+      fetch(`/api/stations?lat=${p.lat}&lng=${p.lng}&radiusKm=4`)
+        .then((x) => x.json().then((j) => ({ ok: x.ok, j, p })))
+        .catch(() => null)
+    ));
+
+    const byId = new Map();
+    let lastBudget = null, anyMock = false;
+    for (const res of results) {
+      if (!res?.ok) continue;
+      lastBudget = res.j.budget;
+      anyMock = anyMock || res.j.mock;
+      for (const s of res.j.stations) {
+        if (!byId.has(s.id)) byId.set(s.id, { ...s, routeKm: res.p.routeKm });
+      }
+    }
+    if (!byId.size) throw new Error('no stations found along this route');
+
+    route = { label: routeDest.label, distanceKm: rt.distanceKm, durationMin: rt.durationMin, coords: rt.coords };
+    routeMode = true;
+    stations = [...byId.values()];
+    lastResponse = {
+      fetchedAt: new Date().toISOString(),
+      source: 'route',
+      mock: anyMock,
+      stale: false,
+      budget: lastBudget || { used: 0, limit: 0 },
+    };
+    lastLoadedAt = Date.now();
+    els.mockBanner.hidden = !anyMock;
+
+    routeLayer.clearLayers();
+    L.polyline(rt.coords, { color: '#0d9488', weight: 5, opacity: 0.75 }).addTo(routeLayer);
+    L.marker([routeDest.lat, routeDest.lng], {
+      icon: L.divIcon({ className: 'pp-wrap', html: '<div class="center-dot" style="background:#dc2626"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+      interactive: false,
+    }).addTo(routeLayer);
+
+    render(true);
+  } catch (e) {
+    showError('Route search failed: ' + e.message);
+    els.meta.textContent = 'Route search failed.';
+  } finally {
+    setLoading(false);
+  }
+}
+
 // ------------------------------------------------------------------ data
 async function load() {
+  if (routeMode) return; // route results stay until you exit route mode
   if (!state.center) return;
   els.meta.textContent = 'Loading prices…';
   hideError();
@@ -618,6 +781,7 @@ function restartAutoRefresh() {
   const mins = Number(state.settings.refreshMins);
   if (!mins) return;
   refreshTimer = setInterval(() => {
+    if (routeMode) return;
     if (state.follow) locateAndSearch({ silent: true });
     else if (state.center) load();
   }, mins * 60e3);
@@ -625,7 +789,7 @@ function restartAutoRefresh() {
 
 document.addEventListener('visibilitychange', () => {
   const mins = Number(state.settings.refreshMins);
-  if (!mins || document.hidden || Date.now() - lastLoadedAt < mins * 60e3) return;
+  if (routeMode || !mins || document.hidden || Date.now() - lastLoadedAt < mins * 60e3) return;
   if (state.follow) locateAndSearch({ silent: true });
   else if (state.center) load();
 });
@@ -760,10 +924,13 @@ function makeCard(s, { tier, best, priced }) {
   const closed = s.openNow === false ? '<span class="closed-chip">Closed</span>' : '';
   if (s.openNow === false) li.classList.add('closed');
   const stars = s.rating ? `★ ${s.rating}${s.ratingCount ? ` (${s.ratingCount})` : ''} · ` : '';
+  const where = s.routeKm != null
+    ? `km ${s.routeKm} of drive · ${fmtDist(s.distanceKm)} off route`
+    : fmtDist(s.distanceKm);
   li.innerHTML =
     badge +
     `<div class="station-info"><div class="station-name">${esc(s.name)}${closed}</div>` +
-    `<div class="station-sub">${stars}${fmtDist(s.distanceKm)} · ${esc(s.address)}</div></div>` +
+    `<div class="station-sub">${stars}${where} · ${esc(s.address)}</div></div>` +
     `<div class="station-price">${price}</div>` +
     `<button class="star-btn${fav ? ' active' : ''}" title="${fav ? 'Remove from' : 'Add to'} favourites" aria-label="${fav ? 'Remove from' : 'Add to'} favourites">${fav ? '★' : '☆'}</button>`;
   li.querySelector('.star-btn').addEventListener('click', (e) => {
@@ -833,7 +1000,7 @@ function render(recenter = false) {
   const byPrice = [...priced].sort((a, b) => a.prices[fuel].cents - b.prices[fuel].cents);
   const priceRank = new Map(byPrice.map((s, i) => [s.id, i]));
   const ordered = state.settings.sort === 'distance'
-    ? [...priced].sort((a, b) => a.distanceKm - b.distanceKm)
+    ? [...priced].sort((a, b) => (routeMode ? a.routeKm - b.routeKm : a.distanceKm - b.distanceKm))
     : byPrice;
   const unpriced = pool.filter((s) => !s.prices[fuel]);
 
@@ -884,8 +1051,12 @@ function render(recenter = false) {
   ordered.filter((s) => !isFav(s.id)).forEach((s) => wire(s, opts(s)));
   if (showUnpriced) unpriced.forEach((s) => wire(s, { priced: false }));
 
-  recordHistory(fuel, byPrice);
-  renderCompare(byPrice, fuel);
+  if (!routeMode) {
+    recordHistory(fuel, byPrice);
+    renderCompare(byPrice, fuel);
+  } else {
+    els.compare.hidden = true;
+  }
 
   els.showUnpriced.hidden = unpriced.length === 0;
   els.showUnpriced.textContent = `${showUnpriced ? 'Hide' : 'Show'} ${unpriced.length} station${unpriced.length === 1 ? '' : 's'} without a ${FUEL_LABELS[fuel].toLowerCase()} price`;
@@ -918,23 +1089,35 @@ function render(recenter = false) {
   if (lastResponse) {
     const t = new Date(lastResponse.fetchedAt);
     const hh = `${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`;
-    const src = lastResponse.mock ? 'sample data' : lastResponse.source === 'google' ? 'live' : 'cached';
+    const src = lastResponse.mock ? 'sample data' : lastResponse.source === 'google' ? 'live' : lastResponse.source === 'route' ? 'live' : 'cached';
     const stale = lastResponse.stale ? ' · ⚠ stale data (budget/API issue)' : '';
     const budget = lastResponse.mock ? '' : ` · API ${lastResponse.budget.used}/${lastResponse.budget.limit}`;
-    els.meta.textContent =
-      `${byPrice.length} station${byPrice.length === 1 ? '' : 's'} · ${FUEL_LABELS[fuel]} · ${radiusLabel()} around ${state.center.label} · ${hh} (${src})${budget}${stale}`;
+    if (routeMode && route) {
+      const hrs = Math.floor(route.durationMin / 60);
+      const mins = route.durationMin % 60;
+      els.meta.textContent =
+        `${byPrice.length} station${byPrice.length === 1 ? '' : 's'} along your ${route.distanceKm} km drive to ${route.label}` +
+        ` (${hrs ? `${hrs} h ` : ''}${mins} min) · ${FUEL_LABELS[fuel]}${budget}${stale}`;
+    } else {
+      els.meta.textContent =
+        `${byPrice.length} station${byPrice.length === 1 ? '' : 's'} · ${FUEL_LABELS[fuel]} · ${radiusLabel()} around ${state.center.label} · ${hh} (${src})${budget}${stale}`;
+    }
     els.liveDot.classList.toggle('off', Boolean(lastResponse.mock || lastResponse.stale));
   }
 
   // ---- viewport
   if (recenter) {
-    const pts = (byPrice.length ? byPrice : stations).map((s) => [s.lat, s.lng]);
-    if (state.center) pts.push([state.center.lat, state.center.lng]);
     const pad = desktop
       ? { paddingTopLeft: [436, 36], paddingBottomRight: [36, 36] } // clear the floating panel
       : { padding: [24, 24] };
-    if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { maxZoom: 14, ...pad });
-    else if (state.center) map.setView([state.center.lat, state.center.lng], 12);
+    if (routeMode && route) {
+      map.fitBounds(L.latLngBounds(route.coords), pad);
+    } else {
+      const pts = (byPrice.length ? byPrice : stations).map((s) => [s.lat, s.lng]);
+      if (state.center) pts.push([state.center.lat, state.center.lng]);
+      if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { maxZoom: 14, ...pad });
+      else if (state.center) map.setView([state.center.lat, state.center.lng], 12);
+    }
     els.searchArea.hidden = true;
   }
 }
