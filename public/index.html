@@ -181,6 +181,17 @@
             <button id="toggle-alert" class="switch" role="switch" aria-checked="false" aria-label="Enable price alerts" style="align-self:flex-end"><span class="knob"></span></button>
           </div>
         </div>
+        <div class="setting-row loyalty-row">
+          <div class="setting-info"><span class="setting-name">Loyalty discounts</span><span class="setting-desc">¢/L off at your brands — everything re-ranks by your real price</span></div>
+          <div class="loyalty-controls">
+            <div id="loyalty-list" class="loyalty-list"></div>
+            <div class="loyalty-add">
+              <select id="loyalty-brand" class="loyalty-select" aria-label="Brand"></select>
+              <input id="loyalty-cents" type="number" min="0.5" max="20" step="0.5" placeholder="¢/L" aria-label="Cents per litre off" />
+              <button id="loyalty-add-btn" class="chip">Add</button>
+            </div>
+          </div>
+        </div>
         <div class="setting-row">
           <div class="setting-info"><span class="setting-name">Your vehicle</span><span class="setting-desc">Powers the “worth the drive?” math</span></div>
           <div class="vehicle-fields">

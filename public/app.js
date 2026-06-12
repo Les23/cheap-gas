@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS = {
   fillL: 50,   // typical fill, litres
   alertOn: false,
   alertCents: 150,
+  loyalty: {},   // brand label -> ¢/L off (e.g. { Pioneer: 3 })
 };
 
 const els = {
@@ -50,6 +51,10 @@ const els = {
   linkShowBtn: document.getElementById('link-show-btn'),
   linkEnterBtn: document.getElementById('link-enter-btn'),
   linkPanel: document.getElementById('link-panel'),
+  loyaltyList: document.getElementById('loyalty-list'),
+  loyaltyBrand: document.getElementById('loyalty-brand'),
+  loyaltyCents: document.getElementById('loyalty-cents'),
+  loyaltyAddBtn: document.getElementById('loyalty-add-btn'),
   alertCents: document.getElementById('alert-cents'),
   toggleAlert: document.getElementById('toggle-alert'),
   econInput: document.getElementById('econ-input'),
@@ -224,6 +229,17 @@ function brandDomain(name) {
 function brandLabel(name) {
   const hit = BRAND_DOMAINS.find(([re]) => re.test(name));
   return hit ? hit[2] : name;
+}
+
+// Loyalty: what YOU actually pay after per-brand discounts
+function loyaltyOff(name) {
+  const off = Number((state.settings.loyalty || {})[brandLabel(name)]) || 0;
+  return off > 0 ? off : 0;
+}
+
+function effCents(s, fuel) {
+  const p = s.prices[fuel];
+  return p ? +(p.cents - loyaltyOff(s.name)).toFixed(1) : null;
 }
 
 function esc(s) {
@@ -414,6 +430,43 @@ els.toggleUnpriced.addEventListener('click', () => {
   render();
 });
 
+// ---- loyalty editor
+function renderLoyaltyUI() {
+  const loyalty = state.settings.loyalty || {};
+  els.loyaltyList.innerHTML = '';
+  for (const [brand, off] of Object.entries(loyalty)) {
+    const chip = document.createElement('span');
+    chip.className = 'loyalty-chip';
+    chip.innerHTML = `${esc(brand)} −${off}¢ <button aria-label="Remove ${esc(brand)} discount">✕</button>`;
+    chip.querySelector('button').addEventListener('click', () => {
+      delete state.settings.loyalty[brand];
+      saveState();
+      renderLoyaltyUI();
+      render();
+    });
+    els.loyaltyList.appendChild(chip);
+  }
+  if (!els.loyaltyBrand.options.length) {
+    for (const [, , label] of BRAND_DOMAINS) {
+      const o = document.createElement('option');
+      o.value = label;
+      o.textContent = label;
+      els.loyaltyBrand.appendChild(o);
+    }
+  }
+}
+
+els.loyaltyAddBtn.addEventListener('click', () => {
+  const brand = els.loyaltyBrand.value;
+  const off = Math.min(20, Math.max(0.5, Number(els.loyaltyCents.value) || 0));
+  if (!brand || !off) return;
+  state.settings.loyalty = { ...(state.settings.loyalty || {}), [brand]: off };
+  els.loyaltyCents.value = '';
+  saveState();
+  renderLoyaltyUI();
+  render();
+});
+
 els.toggleClosed.addEventListener('click', () => {
   state.settings.hideClosed = !state.settings.hideClosed;
   saveState();
@@ -434,6 +487,8 @@ function syncSettingsUI() {
   els.fillInput.value = state.settings.fillL;
   els.alertCents.value = state.settings.alertCents;
   els.toggleAlert.setAttribute('aria-checked', String(state.settings.alertOn));
+
+  renderLoyaltyUI();
 
   if (syncAvailable === false) els.syncStatus.textContent = 'This device only — server has no sync database';
   else if (auth) els.syncStatus.textContent = `Synced · account …${auth.id.slice(-6)} · no sign-up needed`;
@@ -1093,9 +1148,9 @@ function renderCompare(byPrice, fuel) {
   }
 
   const mine = inArea[0];           // your best-priced starred station
-  const best = byPrice[0];          // cheapest overall
-  const myC = mine.prices[fuel].cents;
-  const bestC = best.prices[fuel].cents;
+  const best = byPrice[0];          // cheapest overall (effective)
+  const myC = effCents(mine, fuel);
+  const bestC = effCents(best, fuel);
   const diff = +(myC - bestC).toFixed(1);
 
   let line;
@@ -1117,7 +1172,9 @@ function renderCompare(byPrice, fuel) {
   const prev = [...hist].reverse().find((h) => h.d !== localDate());
   let trend = '';
   if (prev) {
-    const dd = +(bestC - prev.cheap).toFixed(1);
+    // trend compares raw market prices (history records pump prices, not your discounts)
+    const rawCheap = Math.min(...byPrice.map((s) => s.prices[fuel].cents));
+    const dd = +(rawCheap - prev.cheap).toFixed(1);
     trend = dd === 0
       ? 'cheapest price unchanged vs yesterday'
       : dd < 0
@@ -1152,8 +1209,12 @@ function popupHtml(s) {
     s.openNow === false ? '<span style="color:#ef4444;font-weight:700">Closed</span>' : '',
     fmtDist(s.distanceKm),
   ].filter(Boolean).join(' · ');
+  const off = loyaltyOff(s.name);
+  const yours = off > 0 && s.prices[state.fuel]
+    ? `<div class="pp-row"><span>Your price (−${off}¢ loyalty)</span><span><strong>${priceText(effCents(s, state.fuel))}${priceUnitLabel()}</strong></span></div>`
+    : '';
   return `<div class="gas-popup"><div class="pp-name">${esc(s.name)}</div>` +
-    `<div class="pp-addr">${esc(s.address)} · ${meta}</div>${rows}` +
+    `<div class="pp-addr">${esc(s.address)} · ${meta}</div>${rows}${yours}` +
     `<a class="pp-dir" href="${dir}" target="_blank" rel="noopener">Directions ↗</a></div>`;
 }
 
@@ -1195,11 +1256,21 @@ function makeCard(s, { tier, best, priced }) {
   li.tabIndex = 0;
   let delta = '';
   if (priced && favBaseCents != null && !isFav(s.id)) {
-    const d = +(s.prices[state.fuel].cents - favBaseCents).toFixed(1);
+    const d = +(effCents(s, state.fuel) - favBaseCents).toFixed(1);
     if (d !== 0) delta = `<div class="fav-delta">${d > 0 ? '+' : '−'}${Math.abs(d)}¢ vs ⭐</div>`;
   }
+  const off = priced ? loyaltyOff(s.name) : 0;
+  const p = s.prices[state.fuel];
+  const priceHtml = priced
+    ? (p.currency && p.currency !== 'CAD'
+      ? `${(p.cents / 100).toFixed(3)}<span class="unit">${p.currency}/L</span>`
+      : `${priceText(effCents(s, state.fuel))}<span class="unit">${priceUnitLabel()}</span>`)
+    : fmtPrice(null);
+  const loyaltyNote = off > 0
+    ? `<div class="loyalty-note">−${off}¢ ${esc(brandLabel(s.name))} · pump ${priceText(p.cents)}</div>`
+    : '';
   const price = priced
-    ? `${best ? '<span class="best-chip">Best price</span>' : ''}<div class="price-big t-${tier}">${fmtPrice(s.prices[state.fuel])}</div><div class="price-age">${ago(s.prices[state.fuel].updated)}</div>${delta}`
+    ? `${best ? '<span class="best-chip">Best price</span>' : ''}<div class="price-big t-${tier}">${priceHtml}</div><div class="price-age">${ago(p.updated)}</div>${loyaltyNote}${delta}`
     : `<div class="price-big">${fmtPrice(null)}</div><div class="price-age">no ${FUEL_LABELS[state.fuel].toLowerCase()} price</div>`;
   const domain = brandDomain(s.name);
   const badge = domain
@@ -1236,7 +1307,7 @@ function makeCard(s, { tier, best, priced }) {
 
 function makeMarker(s, { tier, best, priced }) {
   const cls = (priced ? `price-pill t-${tier}${best ? ' best' : ''}` : 'price-pill dot') + (isFav(s.id) ? ' fav' : '');
-  const inner = priced ? priceText(s.prices[state.fuel].cents, { short: true }) : '';
+  const inner = priced ? priceText(effCents(s, state.fuel), { short: true }) : '';
   const icon = L.divIcon({
     className: 'pp-wrap',
     html: `<div class="${cls}" title="${esc(s.name)}">${inner}</div>`,
@@ -1282,7 +1353,7 @@ function render(recenter = false) {
   if (state.brands.length) pool = pool.filter((s) => state.brands.includes(brandLabel(s.name)));
   if (state.settings.hideClosed) pool = pool.filter((s) => s.openNow !== false);
   const priced = pool.filter((s) => s.prices[fuel]);
-  const byPrice = [...priced].sort((a, b) => a.prices[fuel].cents - b.prices[fuel].cents);
+  const byPrice = [...priced].sort((a, b) => effCents(a, fuel) - effCents(b, fuel)); // ranked by YOUR price
   const priceRank = new Map(byPrice.map((s, i) => [s.id, i]));
   const ordered = state.settings.sort === 'distance'
     ? [...priced].sort((a, b) => (routeMode ? a.routeKm - b.routeKm : a.distanceKm - b.distanceKm))
@@ -1313,7 +1384,7 @@ function render(recenter = false) {
 
   const favsIn = ordered.filter((s) => isFav(s.id));
   favBaseCents = favsIn.length
-    ? Math.min(...favsIn.map((s) => s.prices[fuel].cents))
+    ? Math.min(...favsIn.map((s) => effCents(s, fuel)))
     : null;
 
   const divider = (label) => {
@@ -1349,7 +1420,7 @@ function render(recenter = false) {
   // ---- stats strip
   els.statsStrip.hidden = byPrice.length === 0;
   if (byPrice.length) {
-    const cents = byPrice.map((s) => s.prices[fuel].cents);
+    const cents = byPrice.map((s) => effCents(s, fuel));
     const avg = cents.reduce((a, b) => a + b, 0) / cents.length;
     const u = `<span class="u">${priceUnitLabel()}</span>`;
     els.statCheap.innerHTML = priceText(cents[0]) + u;
