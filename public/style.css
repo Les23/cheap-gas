@@ -352,6 +352,13 @@ button, input, select { font: inherit; color: inherit; }
 .chip:hover { border-color: var(--accent); }
 .chip.active { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
 
+.places-bar { padding-top: 10px; }
+.place-chip { display: inline-flex; align-items: center; gap: 6px; }
+.place-del { color: var(--muted); font-size: 10px; }
+.place-del:hover { color: #ef4444; }
+
+.gas-popup .pp-share { margin-left: 12px; }
+
 .closed-chip {
   display: inline-block;
   margin-left: 6px;

@@ -41,6 +41,7 @@ const els = {
   searchArea: document.getElementById('search-area-btn'),
   compare: document.getElementById('compare-card'),
   brandBar: document.getElementById('brand-bar'),
+  placesBar: document.getElementById('places-bar'),
   toggleClosed: document.getElementById('toggle-closed'),
   statsStrip: document.getElementById('stats-strip'),
   statCheap: document.getElementById('stat-cheap'),
@@ -1213,10 +1214,31 @@ function popupHtml(s) {
   const yours = off > 0 && s.prices[state.fuel]
     ? `<div class="pp-row"><span>Your price (−${off}¢ loyalty)</span><span><strong>${priceText(effCents(s, state.fuel))}${priceUnitLabel()}</strong></span></div>`
     : '';
+  const p0 = s.prices[state.fuel];
+  const shareTxt = `${s.name}${p0 ? ` — ${FUEL_LABELS[state.fuel]} ${priceText(p0.cents)}${priceUnitLabel()}` : ''} · ${s.address}`;
   return `<div class="gas-popup"><div class="pp-name">${esc(s.name)}</div>` +
     `<div class="pp-addr">${esc(s.address)} · ${meta}</div>${rows}${yours}` +
-    `<a class="pp-dir" href="${dir}" target="_blank" rel="noopener">Directions ↗</a></div>`;
+    `<a class="pp-dir" href="${dir}" target="_blank" rel="noopener">Directions ↗</a>` +
+    `<a class="pp-dir pp-share" href="#" data-text="${esc(shareTxt)}" data-url="${dir}">Share</a></div>`;
 }
+
+// Wire the Share link whenever a popup opens (Web Share API, clipboard fallback)
+map.on('popupopen', (e) => {
+  const el = e.popup.getElement()?.querySelector('.pp-share');
+  if (!el) return;
+  el.addEventListener('click', async (ev) => {
+    ev.preventDefault();
+    const text = el.dataset.text;
+    const url = el.dataset.url;
+    try {
+      if (navigator.share) await navigator.share({ title: 'CheapGas', text, url });
+      else {
+        await navigator.clipboard.writeText(`${text}\n${url}`);
+        showInfo('Copied to clipboard — paste it anywhere.');
+      }
+    } catch { /* user cancelled the share sheet */ }
+  });
+});
 
 function select(id, opts = {}) {
   const prev = refs.get(selectedId);
@@ -1318,6 +1340,42 @@ function makeMarker(s, { tier, best, priced }) {
   return L.marker([s.lat, s.lng], { icon, riseOnHover: true, zIndexOffset: baseZ });
 }
 
+// Saved places: Home / Work / Cottage one-tap switching (synced via settings)
+function renderPlacesBar() {
+  const places = state.settings.places || [];
+  els.placesBar.hidden = places.length === 0 && !state.center;
+  els.placesBar.innerHTML = '';
+  for (const p of places) {
+    const chip = document.createElement('button');
+    chip.className = 'chip place-chip';
+    chip.innerHTML = `📍 ${esc(p.name)}<span class="place-del" title="Remove ${esc(p.name)}">✕</span>`;
+    chip.addEventListener('click', () => {
+      els.input.value = p.name;
+      setCenter(p.lat, p.lng, p.name);
+    });
+    chip.querySelector('.place-del').addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.settings.places = places.filter((x) => x !== p);
+      saveState();
+      renderPlacesBar();
+    });
+    els.placesBar.appendChild(chip);
+  }
+  if (state.center) {
+    const add = document.createElement('button');
+    add.className = 'chip';
+    add.textContent = '＋ Save this spot';
+    add.addEventListener('click', () => {
+      const name = (window.prompt('Name this place (e.g. Home, Work, Cottage):') || '').trim();
+      if (!name) return;
+      state.settings.places = [...places.filter((x) => x.name !== name), { name, lat: state.center.lat, lng: state.center.lng }];
+      saveState();
+      renderPlacesBar();
+    });
+    els.placesBar.appendChild(add);
+  }
+}
+
 function renderBrandBar() {
   const counts = new Map();
   for (const s of stations) {
@@ -1348,6 +1406,7 @@ function renderBrandBar() {
 
 function render(recenter = false) {
   const fuel = state.fuel;
+  renderPlacesBar();
   renderBrandBar();
   let pool = stations;
   if (state.brands.length) pool = pool.filter((s) => state.brands.includes(brandLabel(s.name)));
@@ -1451,9 +1510,14 @@ function render(recenter = false) {
     if (routeMode && route) {
       const hrs = Math.floor(route.durationMin / 60);
       const mins = route.durationMin % 60;
+      let tripCost = '';
+      if (byPrice.length) {
+        const dollars = route.distanceKm * (state.settings.econ / 100) * (effCents(byPrice[0], fuel) / 100);
+        tripCost = ` · trip ≈ $${dollars.toFixed(2)} fuel`;
+      }
       els.meta.textContent =
         `${byPrice.length} station${byPrice.length === 1 ? '' : 's'} along your ${route.distanceKm} km drive to ${route.label}` +
-        ` (${hrs ? `${hrs} h ` : ''}${mins} min) · ${FUEL_LABELS[fuel]}${budget}${stale}`;
+        ` (${hrs ? `${hrs} h ` : ''}${mins} min) · ${FUEL_LABELS[fuel]}${tripCost}${budget}${stale}`;
     } else {
       els.meta.textContent =
         `${byPrice.length} station${byPrice.length === 1 ? '' : 's'} · ${FUEL_LABELS[fuel]} · ${radiusLabel()} around ${state.center.label} · ${hh} (${src})${budget}${stale}`;
