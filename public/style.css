@@ -301,6 +301,50 @@ button, input, select { font: inherit; color: inherit; }
 .price-big.t-high { color: var(--high); }
 .price-age { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
 
+.star-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 2px;
+  transition: transform .12s, color .12s;
+}
+.star-btn:hover { transform: scale(1.2); color: #f59e0b; }
+.star-btn.active { color: #f59e0b; }
+
+.list-divider {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 2px 0;
+}
+
+.fav-delta { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+/* ---------- compare card ---------- */
+.compare-card {
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.compare-card .cmp-title { font-weight: 700; font-size: 13px; }
+.compare-card .cmp-sub { color: var(--muted); }
+.compare-card .cmp-good { color: var(--good); font-weight: 700; }
+.compare-card .cmp-bad { color: var(--mid); font-weight: 700; }
+.compare-card .cmp-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 3px; }
+.cmp-spark { color: var(--accent-strong); flex-shrink: 0; width: 60px; height: 18px; }
+
+.price-pill.fav { box-shadow: 0 0 0 2px #f59e0b, 0 2px 8px rgba(2, 6, 23, .25); }
+
 .link-btn {
   margin: 10px 2px 2px;
   background: none; border: none;

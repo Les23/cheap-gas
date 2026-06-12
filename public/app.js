@@ -33,6 +33,7 @@ const els = {
   list: document.getElementById('station-list'),
   showUnpriced: document.getElementById('show-unpriced'),
   searchArea: document.getElementById('search-area-btn'),
+  compare: document.getElementById('compare-card'),
   statsStrip: document.getElementById('stats-strip'),
   statCheap: document.getElementById('stat-cheap'),
   statAvg: document.getElementById('stat-avg'),
@@ -58,6 +59,7 @@ state = {
   // follow = keep re-detecting where you are; off when a city was searched manually
   follow: state.follow ?? (state.center ? state.center.label === 'my location' : true),
   settings: { ...DEFAULT_SETTINGS, ...(state.settings || {}) },
+  favorites: state.favorites || [], // [{ id, name }]
 };
 
 let stations = [];
@@ -182,6 +184,52 @@ function brandDomain(name) {
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ---- favorites + price history (all stored on this device)
+function isFav(id) { return state.favorites.some((f) => f.id === id); }
+
+function toggleFav(s) {
+  if (isFav(s.id)) state.favorites = state.favorites.filter((f) => f.id !== s.id);
+  else state.favorites.push({ id: s.id, name: s.name });
+  saveState();
+  render();
+}
+
+function localDate() { return new Date().toLocaleDateString('en-CA'); } // YYYY-MM-DD
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem('cheapgas-history')) || {}; } catch { return {}; }
+}
+
+function recordHistory(fuel, byPrice) {
+  if (!byPrice.length || !lastResponse || lastResponse.mock) return;
+  const h = loadHistory();
+  const arr = (h[fuel] = h[fuel] || []);
+  const cents = byPrice.map((s) => s.prices[fuel].cents);
+  const entry = {
+    d: localDate(),
+    cheap: cents[0],
+    avg: +(cents.reduce((a, b) => a + b, 0) / cents.length).toFixed(1),
+    favs: {},
+  };
+  for (const f of state.favorites) {
+    const s = byPrice.find((x) => x.id === f.id);
+    if (s) entry.favs[f.id] = s.prices[fuel].cents;
+  }
+  const i = arr.findIndex((x) => x.d === entry.d);
+  if (i >= 0) arr[i] = entry; else arr.push(entry);
+  if (arr.length > 60) arr.splice(0, arr.length - 60);
+  localStorage.setItem('cheapgas-history', JSON.stringify(h));
+}
+
+function spark(hist) {
+  const pts = hist.slice(-7).map((h) => h.cheap);
+  if (pts.length < 2) return '';
+  const min = Math.min(...pts), max = Math.max(...pts), span = (max - min) || 1;
+  const xy = pts.map((v, i) =>
+    `${(i * (60 / (pts.length - 1))).toFixed(1)},${(16 - ((v - min) / span) * 13).toFixed(1)}`).join(' ');
+  return `<svg class="cmp-spark" viewBox="0 0 60 18" aria-hidden="true"><polyline points="${xy}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`;
 }
 
 function showError(msg) { els.errBanner.textContent = msg; els.errBanner.hidden = false; }
@@ -432,6 +480,53 @@ document.addEventListener('visibilitychange', () => {
   else if (state.center) load();
 });
 
+// ------------------------------------------------------------------ compare card
+function renderCompare(byPrice, fuel) {
+  const el = els.compare;
+  if (!state.favorites.length || !byPrice.length) { el.hidden = true; return; }
+
+  const inArea = byPrice.filter((s) => isFav(s.id));
+  if (!inArea.length) {
+    el.innerHTML = `<div class="cmp-title">⭐ ${esc(state.favorites[0].name)}</div>` +
+      `<div class="cmp-sub">no ${FUEL_LABELS[fuel]} price in this search — star a station here to compare</div>`;
+    el.hidden = false;
+    return;
+  }
+
+  const mine = inArea[0];           // your best-priced starred station
+  const best = byPrice[0];          // cheapest overall
+  const myC = mine.prices[fuel].cents;
+  const bestC = best.prices[fuel].cents;
+  const diff = +(myC - bestC).toFixed(1);
+
+  let line;
+  if (mine.id === best.id || diff <= 0) {
+    line = `<span class="cmp-good">cheapest around right now 🎉</span>`;
+  } else {
+    const save = ((diff / 100) * 50).toFixed(2);
+    line = `<span class="cmp-bad">+${diff}¢</span> vs ${esc(best.name)} (${priceText(bestC)}${priceUnitLabel()}) — ` +
+      `switching saves ~$${save} per 50 L fill`;
+  }
+
+  const hist = loadHistory()[fuel] || [];
+  const prev = [...hist].reverse().find((h) => h.d !== localDate());
+  let trend = '';
+  if (prev) {
+    const dd = +(bestC - prev.cheap).toFixed(1);
+    trend = dd === 0
+      ? 'cheapest price unchanged vs yesterday'
+      : dd < 0
+        ? `cheapest is <span class="cmp-good">↓ ${Math.abs(dd)}¢</span> vs yesterday`
+        : `cheapest is <span class="cmp-bad">↑ ${dd}¢</span> vs yesterday`;
+  }
+
+  el.innerHTML =
+    `<div class="cmp-title">⭐ ${esc(mine.name)} · ${priceText(myC)}${priceUnitLabel()}</div>` +
+    `<div class="cmp-sub">${line}</div>` +
+    (trend ? `<div class="cmp-row"><span class="cmp-sub">${trend}</span>${spark(hist)}</div>` : '');
+  el.hidden = false;
+}
+
 // ------------------------------------------------------------------ render
 function tierOf(rank, total) {
   if (total <= 1) return 'good';
@@ -481,23 +576,36 @@ function select(id, opts = {}) {
   }
 }
 
+let favBaseCents = null; // cents at your best-priced ⭐ station, for per-card deltas
+
 function makeCard(s, { tier, best, priced }) {
   const li = document.createElement('li');
   li.className = 'station-card' + (best ? ' cheapest' : '') + (priced ? '' : ' unpriced');
   li.setAttribute('role', 'button');
   li.tabIndex = 0;
+  let delta = '';
+  if (priced && favBaseCents != null && !isFav(s.id)) {
+    const d = +(s.prices[state.fuel].cents - favBaseCents).toFixed(1);
+    if (d !== 0) delta = `<div class="fav-delta">${d > 0 ? '+' : '−'}${Math.abs(d)}¢ vs ⭐</div>`;
+  }
   const price = priced
-    ? `${best ? '<span class="best-chip">Best price</span>' : ''}<div class="price-big t-${tier}">${fmtPrice(s.prices[state.fuel])}</div><div class="price-age">${ago(s.prices[state.fuel].updated)}</div>`
+    ? `${best ? '<span class="best-chip">Best price</span>' : ''}<div class="price-big t-${tier}">${fmtPrice(s.prices[state.fuel])}</div><div class="price-age">${ago(s.prices[state.fuel].updated)}</div>${delta}`
     : `<div class="price-big">${fmtPrice(null)}</div><div class="price-age">no ${FUEL_LABELS[state.fuel].toLowerCase()} price</div>`;
   const domain = brandDomain(s.name);
   const badge = domain
     ? `<div class="monogram has-logo"><img loading="lazy" alt="" src="https://www.google.com/s2/favicons?domain=${domain}&sz=64"></div>`
     : `<div class="monogram" style="background:${monoColor(s.name)}">${esc(s.name.charAt(0))}</div>`;
+  const fav = isFav(s.id);
   li.innerHTML =
     badge +
     `<div class="station-info"><div class="station-name">${esc(s.name)}</div>` +
     `<div class="station-sub">${fmtDist(s.distanceKm)} · ${esc(s.address)}</div></div>` +
-    `<div class="station-price">${price}</div>`;
+    `<div class="station-price">${price}</div>` +
+    `<button class="star-btn${fav ? ' active' : ''}" title="${fav ? 'Remove from' : 'Add to'} favourites" aria-label="${fav ? 'Remove from' : 'Add to'} favourites">${fav ? '★' : '☆'}</button>`;
+  li.querySelector('.star-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleFav(s);
+  });
   const img = li.querySelector('.monogram img');
   if (img) {
     img.addEventListener('error', () => {
@@ -511,7 +619,7 @@ function makeCard(s, { tier, best, priced }) {
 }
 
 function makeMarker(s, { tier, best, priced }) {
-  const cls = priced ? `price-pill t-${tier}${best ? ' best' : ''}` : 'price-pill dot';
+  const cls = (priced ? `price-pill t-${tier}${best ? ' best' : ''}` : 'price-pill dot') + (isFav(s.id) ? ' fav' : '');
   const inner = priced ? priceText(s.prices[state.fuel].cents, { short: true }) : '';
   const icon = L.divIcon({
     className: 'pp-wrap',
@@ -555,12 +663,33 @@ function render(recenter = false) {
     refs.set(s.id, { marker, li, latlng: [s.lat, s.lng], baseZ: opt.best ? 1500 : opt.priced ? 500 : 0 });
   };
 
-  ordered.forEach((s) => wire(s, {
+  const favsIn = ordered.filter((s) => isFav(s.id));
+  favBaseCents = favsIn.length
+    ? Math.min(...favsIn.map((s) => s.prices[fuel].cents))
+    : null;
+
+  const divider = (label) => {
+    const li = document.createElement('li');
+    li.className = 'list-divider';
+    li.textContent = label;
+    els.list.appendChild(li);
+  };
+
+  const opts = (s) => ({
     tier: tierOf(priceRank.get(s.id), priced.length),
     best: priceRank.get(s.id) === 0,
     priced: true,
-  }));
+  });
+  if (favsIn.length) {
+    divider('⭐ Your stations');
+    favsIn.forEach((s) => wire(s, opts(s)));
+    divider('All nearby');
+  }
+  ordered.filter((s) => !isFav(s.id)).forEach((s) => wire(s, opts(s)));
   if (showUnpriced) unpriced.forEach((s) => wire(s, { priced: false }));
+
+  recordHistory(fuel, byPrice);
+  renderCompare(byPrice, fuel);
 
   els.showUnpriced.hidden = unpriced.length === 0;
   els.showUnpriced.textContent = `${showUnpriced ? 'Hide' : 'Show'} ${unpriced.length} station${unpriced.length === 1 ? '' : 's'} without a ${FUEL_LABELS[fuel].toLowerCase()} price`;
