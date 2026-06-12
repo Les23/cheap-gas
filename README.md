@@ -111,6 +111,9 @@ cap — the monthly math still leaves lots of headroom.
 - **Coverage:** the odd station reports no price for some grades — they're
   listed under “stations without a price” so you know they exist.
 - Mock mode is fake data for trying the UI; don't drive to those prices. 🙂
+- Station logos are fetched as website favicons via Google's favicon service;
+  all brand marks remain trademarks of their respective owners. Unrecognized
+  brands show a coloured-letter tile instead.
 
 ## Files
 

@@ -267,6 +267,18 @@ button, input, select { font: inherit; color: inherit; }
   font-size: 15px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
   letter-spacing: .01em;
+  overflow: hidden;
+}
+
+.monogram.has-logo {
+  background: #fff;
+  border: 1px solid var(--border);
+}
+
+.monogram.has-logo img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .station-info { flex: 1; min-width: 0; }

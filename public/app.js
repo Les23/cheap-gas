@@ -144,6 +144,32 @@ function hashStr(s) {
 }
 function monoColor(name) { return MONO_COLORS[hashStr(name) % MONO_COLORS.length]; }
 
+// Brand → website domain; the card shows the site's favicon as the logo.
+// Unmatched brands (and any favicon that fails to load) fall back to the
+// coloured-letter tile.
+const BRAND_DOMAINS = [
+  [/petro[\s-]?(canada|pass)/i, 'petro-canada.ca'],
+  [/esso/i, 'esso.ca'],
+  [/shell/i, 'shell.ca'],
+  [/mobil/i, 'mobil.com'],
+  [/7[\s-]?eleven/i, '7-eleven.ca'],
+  [/canadian\s?tire|gas\+/i, 'canadiantire.ca'],
+  [/costco/i, 'costco.ca'],
+  [/circle\s?k/i, 'circlek.com'],
+  [/ultramar/i, 'ultramar.ca'],
+  [/chevron/i, 'chevron.com'],
+  [/husky/i, 'myhusky.ca'],
+  [/pioneer/i, 'pioneer.ca'],
+  [/fas\s?gas/i, 'fasgas.ca'],
+  [/irving/i, 'irvingoil.com'],
+  [/macewen/i, 'macewen.ca'],
+];
+
+function brandDomain(name) {
+  const hit = BRAND_DOMAINS.find(([re]) => re.test(name));
+  return hit ? hit[1] : null;
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -453,11 +479,24 @@ function makeCard(s, { tier, best, priced }) {
   const price = priced
     ? `${best ? '<span class="best-chip">Best price</span>' : ''}<div class="price-big t-${tier}">${fmtPrice(s.prices[state.fuel])}</div><div class="price-age">${ago(s.prices[state.fuel].updated)}</div>`
     : `<div class="price-big">${fmtPrice(null)}</div><div class="price-age">no ${FUEL_LABELS[state.fuel].toLowerCase()} price</div>`;
+  const domain = brandDomain(s.name);
+  const badge = domain
+    ? `<div class="monogram has-logo"><img loading="lazy" alt="" src="https://www.google.com/s2/favicons?domain=${domain}&sz=64"></div>`
+    : `<div class="monogram" style="background:${monoColor(s.name)}">${esc(s.name.charAt(0))}</div>`;
   li.innerHTML =
-    `<div class="monogram" style="background:${monoColor(s.name)}">${esc(s.name.charAt(0))}</div>` +
+    badge +
     `<div class="station-info"><div class="station-name">${esc(s.name)}</div>` +
     `<div class="station-sub">${fmtDist(s.distanceKm)} · ${esc(s.address)}</div></div>` +
     `<div class="station-price">${price}</div>`;
+  const img = li.querySelector('.monogram img');
+  if (img) {
+    img.addEventListener('error', () => {
+      const m = img.parentElement;
+      m.classList.remove('has-logo');
+      m.style.background = monoColor(s.name);
+      m.textContent = s.name.charAt(0);
+    });
+  }
   return li;
 }
 
