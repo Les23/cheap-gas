@@ -3,3 +3,5 @@ config.json
 data/
 .claude/
 setup-db.local.sql
+*.keystore
+android-package/

@@ -839,6 +839,7 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.json': 'application/json',
   '.webmanifest': 'application/manifest+json',
+  '.apk': 'application/vnd.android.package-archive',
 };
 
 function serveStatic(res, urlPath) {
@@ -852,7 +853,10 @@ function serveStatic(res, urlPath) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       return res.end('Not found');
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    const ext = path.extname(file);
+    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+    if (ext === '.apk') headers['Content-Disposition'] = 'attachment; filename="CheapGas.apk"';
+    res.writeHead(200, headers);
     res.end(data);
   });
 }

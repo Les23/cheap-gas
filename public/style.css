@@ -229,6 +229,14 @@ button, input, select { font: inherit; color: inherit; }
   font-size: 10.5px;
   color: var(--muted);
 }
+.apk-link {
+  display: inline-block;
+  margin-bottom: 3px;
+  color: var(--accent-strong);
+  font-weight: 700;
+  text-decoration: none;
+}
+.apk-link:hover { text-decoration: underline; }
 
 /* ---------- status bar ---------- */
 .status-bar {
