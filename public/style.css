@@ -176,6 +176,7 @@ button, input, select { font: inherit; color: inherit; }
 
 .map-panel { position: absolute; inset: 0; background: var(--bg); }
 
+
 .list-panel {
   position: absolute;
   top: 14px; left: 14px; bottom: 14px;

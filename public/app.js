@@ -72,15 +72,25 @@ const map = L.map('map', { zoomControl: false }).setView([56.3, -96], 4); // Can
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 const markerLayer = L.layerGroup().addTo(map);
 
-// CARTO basemaps (light/dark follow the theme setting)
-const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
-let baseLayer = null;
+// Basemaps: CARTO Positron by day; Esri World Dark Gray Canvas by night
+// (charcoal land with clearly lighter roads — CARTO's dark tiles are too
+// black to read in rural areas). Esri's dark canvas stops at zoom 16, so
+// deeper zooms upscale those tiles.
+const CARTO_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+const ESRI_ATTR = 'Tiles &copy; Esri &copy; OpenStreetMap contributors';
+let baseLayers = [];
 function applyBasemap(dark) {
-  if (baseLayer) map.removeLayer(baseLayer);
-  const style = dark ? 'dark_all' : 'light_all';
-  baseLayer = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}{r}.png`, {
-    maxZoom: 19, subdomains: 'abcd', attribution: TILE_ATTR,
-  }).addTo(map);
+  baseLayers.forEach((l) => map.removeLayer(l));
+  baseLayers = [];
+  if (dark) {
+    const opts = { maxNativeZoom: 16, maxZoom: 19 };
+    baseLayers.push(L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', { ...opts, attribution: ESRI_ATTR }).addTo(map));
+    baseLayers.push(L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', opts).addTo(map));
+  } else {
+    baseLayers.push(L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19, subdomains: 'abcd', attribution: CARTO_ATTR,
+    }).addTo(map));
+  }
 }
 
 const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -94,7 +104,7 @@ function applyTheme() {
   else document.documentElement.setAttribute('data-theme', t);
   applyBasemap(effectiveDark());
 }
-darkMq.addEventListener?.('change', () => { if (state.settings.theme === 'auto') applyBasemap(effectiveDark()); });
+darkMq.addEventListener?.('change', () => { if (state.settings.theme === 'auto') applyTheme(); });
 
 // ------------------------------------------------------------------ helpers
 function distKm(lat1, lng1, lat2, lng2) {
@@ -313,7 +323,7 @@ function syncSettingsUI() {
   els.toggleUnpriced.setAttribute('aria-checked', String(showUnpriced));
   [...els.radius.options].forEach((o) => { o.textContent = RADIUS_LABELS[state.settings.distUnit][o.value]; });
 
-  let about = 'CheapGas · prices via Google Places · map © OpenStreetMap © CARTO';
+  let about = 'CheapGas · prices via Google Places · map © OpenStreetMap · CARTO · Esri';
   if (lastResponse?.mock) about += ' · running on sample data';
   else if (lastResponse) about += ` · API calls today ${lastResponse.budget.used}/${lastResponse.budget.limit}`;
   els.settingsAbout.textContent = about;
