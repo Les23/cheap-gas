@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Cheap Gas — lowest gas prices near you</title>
+  <meta name="description" content="Live lowest gas prices in your city and surrounding cities" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="." aria-label="Cheap Gas home">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="15" fill="url(#bm-g)"/>
+        <defs><linearGradient id="bm-g" x1="0" y1="0" x2="64" y2="64">
+          <stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#0f766e"/>
+        </linearGradient></defs>
+        <path fill="#fff" d="M19 15a5 5 0 0 1 5-5h11a5 5 0 0 1 5 5v33h1.5a2.5 2.5 0 0 1 0 5h-24a2.5 2.5 0 0 1 0-5H19V15zm5 1.5v9a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.5-1.5h-8a1.5 1.5 0 0 0-1.5 1.5z"/>
+        <path fill="#99f6e4" d="M43.6 21.4l4.6-4.6a1.6 1.6 0 0 1 2.3 2.3l-3 3V38.5a5.25 5.25 0 0 1-10.5 0V34h3.2v4.5a2.05 2.05 0 0 0 4.1 0V24a2.6 2.6 0 0 1-.7-2.6z"/>
+      </svg>
+      <span class="brand-name">Cheap<em>Gas</em></span>
+    </a>
+
+    <div class="search-wrap">
+      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M21 21l-4.3-4.3M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z"/></svg>
+      <input id="city-input" type="search" placeholder="Search a city or address…" autocomplete="off" aria-label="Search a city or address" />
+      <ul id="search-results" class="search-results" hidden></ul>
+    </div>
+
+    <div class="controls">
+      <button id="locate-btn" class="ctl ctl-primary" title="Use my location">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v3m0 14v3M2 12h3m14 0h3M12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></svg>
+        <span>Near me</span>
+      </button>
+      <label class="field">
+        <span>Fuel</span>
+        <select id="fuel-select">
+          <option value="regular">Regular</option>
+          <option value="midgrade">Midgrade</option>
+          <option value="premium">Premium</option>
+          <option value="diesel">Diesel</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Radius</span>
+        <select id="radius-select">
+          <option value="5">5 km</option>
+          <option value="10" selected>10 km</option>
+          <option value="25">25 km</option>
+          <option value="50">50 km</option>
+        </select>
+      </label>
+      <button id="refresh-btn" class="ctl ctl-icon" title="Refresh prices" aria-label="Refresh prices">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11A8 8 0 0 0 5.6 6.6L4 8.2M4 13a8 8 0 0 0 14.4 4.4l1.6-1.6M4 4v4.2h4.2M20 20v-4.2h-4.2"/></svg>
+      </button>
+      <button id="settings-btn" class="ctl ctl-icon" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="mock-banner" class="banner warn" hidden>
+    Sample data — add your free Google API key to see real prices (README.md has the steps).
+  </div>
+  <div id="info-banner" class="banner info" hidden></div>
+  <div id="error-banner" class="banner error" hidden></div>
+
+  <main class="layout">
+    <section id="map" class="map-panel" aria-label="Map of gas stations"></section>
+
+    <section class="list-panel" aria-label="Cheapest stations">
+      <div class="status-bar">
+        <span id="live-dot" class="live-dot" aria-hidden="true"></span>
+        <span id="meta-line" class="meta-line">Pick a city or tap “Near me” to start.</span>
+      </div>
+
+      <div id="stats-strip" class="stats-strip" hidden>
+        <div class="stat"><span class="stat-label">Cheapest</span><span id="stat-cheap" class="stat-value good">—</span></div>
+        <div class="stat"><span class="stat-label">Average</span><span id="stat-avg" class="stat-value">—</span></div>
+        <div class="stat"><span class="stat-label">Highest</span><span id="stat-high" class="stat-value high">—</span></div>
+      </div>
+
+      <div class="panel-scroll">
+        <div id="skeletons" hidden aria-hidden="true">
+          <div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div>
+          <div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div>
+        </div>
+        <ol id="station-list" class="station-list"></ol>
+        <button id="show-unpriced" class="link-btn" hidden></button>
+      </div>
+
+      <footer class="panel-foot">
+        Prices via Google · Map © OpenStreetMap © CARTO
+      </footer>
+    </section>
+  </main>
+
+  <div id="settings-overlay" class="settings-overlay" hidden>
+    <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="settings-head">
+        <h2 id="settings-title">Settings</h2>
+        <button id="settings-close" class="ctl ctl-icon" aria-label="Close settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="settings-body">
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Theme</span><span class="setting-desc">Auto follows your device</span></div>
+          <div class="seg" data-setting="theme" role="group" aria-label="Theme">
+            <button data-value="auto">Auto</button><button data-value="light">Light</button><button data-value="dark">Dark</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Price format</span><span class="setting-desc">How prices are displayed</span></div>
+          <div class="seg" data-setting="priceUnit" role="group" aria-label="Price format">
+            <button data-value="cents">¢/L</button><button data-value="dollars">$/L</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Distances</span><span class="setting-desc">Kilometres or miles</span></div>
+          <div class="seg" data-setting="distUnit" role="group" aria-label="Distance unit">
+            <button data-value="km">km</button><button data-value="mi">mi</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Sort stations by</span><span class="setting-desc">Cheapest is always highlighted</span></div>
+          <div class="seg" data-setting="sort" role="group" aria-label="Sort order">
+            <button data-value="price">Price</button><button data-value="distance">Nearest</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Auto-refresh</span><span class="setting-desc">How often prices reload</span></div>
+          <div class="seg" data-setting="refreshMins" role="group" aria-label="Auto-refresh interval">
+            <button data-value="0">Off</button><button data-value="5">5m</button><button data-value="10">10m</button><button data-value="20">20m</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Stations without prices</span><span class="setting-desc">Show stations that report no price</span></div>
+          <button id="toggle-unpriced" class="switch" role="switch" aria-checked="false" aria-label="Show stations without prices"><span class="knob"></span></button>
+        </div>
+        <p id="settings-about" class="settings-about"></p>
+      </div>
+    </div>
+  </div>
+
+  <button id="search-area-btn" class="float-btn" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M21 21l-4.3-4.3M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z"/></svg>
+    Search this area
+  </button>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>

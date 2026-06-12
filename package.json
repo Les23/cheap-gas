@@ -1,0 +1,13 @@
+{
+  "name": "cheap-gas-near-me",
+  "version": "1.0.0",
+  "description": "Live lowest gas prices for your city and surrounding cities",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

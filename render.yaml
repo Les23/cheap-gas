@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: cheap-gas
+    runtime: node
+    plan: free
+    region: ohio
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false

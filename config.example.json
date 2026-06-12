@@ -1,0 +1,6 @@
+{
+  "googleMapsApiKey": "PASTE_YOUR_KEY_HERE",
+  "port": 3000,
+  "maxGoogleCallsPerDay": 30,
+  "cacheMinutes": 30
+}
