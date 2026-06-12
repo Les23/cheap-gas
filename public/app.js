@@ -19,6 +19,8 @@ const DEFAULT_SETTINGS = {
   hideClosed: false,
   econ: 9.0,   // vehicle L/100km
   fillL: 50,   // typical fill, litres
+  alertOn: false,
+  alertCents: 150,
 };
 
 const els = {
@@ -44,6 +46,8 @@ const els = {
   statAvg: document.getElementById('stat-avg'),
   statHigh: document.getElementById('stat-high'),
   skeletons: document.getElementById('skeletons'),
+  alertCents: document.getElementById('alert-cents'),
+  toggleAlert: document.getElementById('toggle-alert'),
   econInput: document.getElementById('econ-input'),
   fillInput: document.getElementById('fill-input'),
   logbookBtn: document.getElementById('logbook-btn'),
@@ -421,6 +425,8 @@ function syncSettingsUI() {
 
   els.econInput.value = state.settings.econ;
   els.fillInput.value = state.settings.fillL;
+  els.alertCents.value = state.settings.alertCents;
+  els.toggleAlert.setAttribute('aria-checked', String(state.settings.alertOn));
 
   let about = 'CheapGas · prices via Google Places · map © OpenStreetMap · CARTO · Esri';
   if (lastResponse?.mock) about += ' · running on sample data';
@@ -436,6 +442,93 @@ els.fillInput.addEventListener('change', () => {
   state.settings.fillL = Math.min(200, Math.max(10, Number(els.fillInput.value) || 50));
   saveState(); syncSettingsUI(); render();
 });
+
+// ------------------------------------------------------------------ push alerts
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+function urlB64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+async function postSubscription(sub) {
+  await fetch('/api/push/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      subscription: sub.toJSON(),
+      fuel: state.fuel,
+      thresholdCents: state.settings.alertCents,
+      lat: state.center?.lat,
+      lng: state.center?.lng,
+      radiusKm: state.radiusKm,
+    }),
+  });
+}
+
+// Re-register silently on each visit so alerts survive server restarts.
+async function ensureSubscribed() {
+  if (!state.settings.alertOn || !state.center) return;
+  if (!('serviceWorker' in navigator) || !('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await postSubscription(sub);
+  } catch { /* background self-heal only */ }
+}
+
+els.toggleAlert.addEventListener('click', async () => {
+  if (state.settings.alertOn) {
+    state.settings.alertOn = false;
+    saveState();
+    syncSettingsUI();
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetch('/api/push/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        });
+        await sub.unsubscribe();
+      }
+    } catch { /* best effort */ }
+    return;
+  }
+  try {
+    if (!('serviceWorker' in navigator) || !('Notification' in window) || !('PushManager' in window)) {
+      throw new Error('this browser can’t do notifications here — on iPhone, Add to Home Screen first, then enable inside the installed app');
+    }
+    const info = await fetch('/api/push/pubkey').then((r) => r.json());
+    if (!info.enabled) throw new Error('this server has no alert keys configured — see the “Price alerts” section of the README');
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error('notification permission was declined');
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8Array(info.key),
+    });
+    await postSubscription(sub);
+    state.settings.alertOn = true;
+    saveState();
+    syncSettingsUI();
+    showInfo(`Price alert on — you’ll be notified when ${FUEL_LABELS[state.fuel]} drops to ${state.settings.alertCents}¢/L near ${state.center?.label || 'your area'} (checked every ~30 min).`);
+  } catch (e) {
+    showError('Could not enable alerts: ' + e.message);
+    syncSettingsUI();
+  }
+});
+
+els.alertCents.addEventListener('change', () => {
+  state.settings.alertCents = Math.min(400, Math.max(50, Number(els.alertCents.value) || 150));
+  saveState();
+  syncSettingsUI();
+  if (state.settings.alertOn) ensureSubscribed();
+});
+
+setTimeout(ensureSubscribed, 8000); // after boot + first locate
 
 // ------------------------------------------------------------------ logbook
 function loadLog() {

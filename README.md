@@ -7,11 +7,13 @@ name. Pick a fuel grade and radius and get a ranked list + map of the cheapest
 stations. Prices auto-refresh every 10 minutes, and in "near me" mode the app
 re-checks your position on each refresh, so it follows you as you move.
 
-No frameworks, no npm installs — just Node.js.
+No frameworks — plain Node.js plus a single dependency (`web-push`) for
+price-alert notifications.
 
 ## Run it
 
 ```powershell
+npm install   # first time only
 node server.js
 ```
 
@@ -103,6 +105,35 @@ just serves cached prices once the cap is hit. The `data/usage.json` counter
 resets on redeploys, which at worst lets a deploy-day exceed the soft daily
 cap — the monthly math still leaves lots of headroom.
 
+## Price alerts (optional, ~10 minutes of setup)
+
+The app can push a notification when the cheapest fuel near you hits your
+target (Settings → *Price alert*). Three pieces make it work:
+
+1. **VAPID keys** (the server's notification signing keys). Locally they're
+   already in `config.json`. For the deployed app: Render dashboard →
+   *cheap-gas* service → **Environment** → add `VAPID_PUBLIC_KEY` and
+   `VAPID_PRIVATE_KEY` with the values from your local `config.json` → Save
+   (it redeploys itself). To make fresh keys later:
+   `node -e "console.log(require('web-push').generateVAPIDKeys())"`.
+2. **A scheduled ping.** The server checks alerts when something calls
+   `/api/alerts/run` (it self-throttles to every 20 min, so over-pinging is
+   harmless). Create a free monitor at <https://uptimerobot.com> (or a free
+   cron at <https://cron-job.org>) that hits
+   `https://YOUR-APP.onrender.com/api/alerts/run` every **20–30 minutes**.
+   Bonus: this also keeps the free instance awake, which one service can
+   afford within Render's free 750 instance-hours/month.
+3. **Enable it in the app** on the device that should get notified: Settings →
+   set your ¢/L target → flip the switch → allow notifications.
+   **iPhone:** notifications only work from the home-screen-installed app
+   (iOS 16.4+), not from a Safari tab — install first, then enable.
+
+Reliability fine print: Render's free tier resets the server's stored
+subscriptions when it redeploys or restarts. The app silently re-registers
+your alert every time you open it, so in practice alerts keep working as long
+as you open the app now and then. You get at most one alert per day per
+device.
+
 ## Honest limitations
 
 - **Freshness:** Google's station prices typically update a few times per day
@@ -119,7 +150,7 @@ cap — the monthly math still leaves lots of headroom.
 
 | File | What it is |
 |---|---|
-| `server.js` | Zero-dependency Node server: static files + `/api/stations` + `/api/geocode`, caching, daily budget guard, mock mode |
+| `server.js` | Node server: static files, `/api/stations`, `/api/geocode`, `/api/route`, push-alert endpoints, caching, daily budget guard, mock mode |
 | `public/` | The web app (Leaflet map + ranked list, PWA manifest) |
 | `config.example.json` | Copy to `config.json` and add your API key |
 | `data/usage.json` | Auto-created; persists today's Google-call count across restarts |

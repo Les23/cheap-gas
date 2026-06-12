@@ -29,6 +29,8 @@ function loadConfig() {
     port: Number(process.env.PORT || fileCfg.port || 3000),
     maxGoogleCallsPerDay: Number(fileCfg.maxGoogleCallsPerDay ?? 30),
     cacheMinutes: Number(fileCfg.cacheMinutes ?? 30),
+    vapidPublicKey: process.env.VAPID_PUBLIC_KEY || fileCfg.vapidPublicKey || '',
+    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || fileCfg.vapidPrivateKey || '',
   };
 }
 const cfg = loadConfig();
@@ -320,6 +322,40 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 
+// Core station lookup with cache, mock mode, and budget guard — shared by the
+// HTTP handler and the alert checker. Throws errors carrying .status.
+async function getStationsFor(lat, lng, radiusKm) {
+  const key = tileKey(lat, lng, radiusKm);
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.at < cfg.cacheMinutes * 60e3) {
+    return { stations: cached.stations, source: 'cache', at: cached.at, stale: false };
+  }
+  if (MOCK) {
+    const stations = mockStations(lat, lng, radiusKm, key);
+    cache.set(key, { at: Date.now(), stations });
+    return { stations, source: 'mock', at: Date.now(), stale: false };
+  }
+  try {
+    const stations = await fetchGoogleStations(lat, lng, radiusKm);
+    if (stations === null) {
+      // Daily budget exhausted — serve whatever we have rather than overspend.
+      if (cached) return { stations: cached.stations, source: 'cache', at: cached.at, stale: true };
+      const err = new Error(`Daily Google call budget (${cfg.maxGoogleCallsPerDay}) used up. Try again tomorrow or raise maxGoogleCallsPerDay in config.json.`);
+      err.status = 429;
+      throw err;
+    }
+    cache.set(key, { at: Date.now(), stations });
+    return { stations, source: 'google', at: Date.now(), stale: false };
+  } catch (e) {
+    if (e.status) throw e;
+    console.error('Places fetch failed:', e.message);
+    if (cached) return { stations: cached.stations, source: 'cache', at: cached.at, stale: true };
+    const err = new Error(`Could not fetch prices: ${e.message}`);
+    err.status = 502;
+    throw err;
+  }
+}
+
 async function handleStations(res, params) {
   const lat = Number(params.get('lat'));
   const lng = Number(params.get('lng'));
@@ -328,52 +364,23 @@ async function handleStations(res, params) {
     return sendJson(res, 400, { error: 'lat and lng query params are required' });
   }
   radiusKm = Math.min(Math.max(radiusKm, 2), 60);
-
-  const key = tileKey(lat, lng, radiusKm);
-  const cached = cache.get(key);
-  const fresh = cached && Date.now() - cached.at < cfg.cacheMinutes * 60e3;
-  const budget = { used: usage.calls, limit: cfg.maxGoogleCallsPerDay };
-
-  const respond = (stations, source, at, stale = false) => {
-    const withDist = stations
+  try {
+    const r = await getStationsFor(lat, lng, radiusKm);
+    const withDist = r.stations
       .map((s) => ({ ...s, distanceKm: +haversineKm(lat, lng, s.lat, s.lng).toFixed(2) }))
       .filter((s) => s.distanceKm <= radiusKm + 2)
       .sort((a, b) => a.distanceKm - b.distanceKm);
     sendJson(res, 200, {
       stations: withDist,
-      source,
+      source: r.source,
       mock: MOCK,
-      stale,
-      fetchedAt: new Date(at).toISOString(),
+      stale: r.stale,
+      fetchedAt: new Date(r.at).toISOString(),
       cacheMinutes: cfg.cacheMinutes,
       budget: { used: usage.calls, limit: cfg.maxGoogleCallsPerDay },
     });
-  };
-
-  if (fresh) return respond(cached.stations, 'cache', cached.at);
-
-  if (MOCK) {
-    const stations = mockStations(lat, lng, radiusKm, key);
-    cache.set(key, { at: Date.now(), stations });
-    return respond(stations, 'mock', Date.now());
-  }
-
-  try {
-    const stations = await fetchGoogleStations(lat, lng, radiusKm);
-    if (stations === null) {
-      // Daily budget exhausted — serve whatever we have rather than overspend.
-      if (cached) return respond(cached.stations, 'cache', cached.at, true);
-      return sendJson(res, 429, {
-        error: `Daily Google call budget (${cfg.maxGoogleCallsPerDay}) used up. Try again tomorrow or raise maxGoogleCallsPerDay in config.json.`,
-        budget,
-      });
-    }
-    cache.set(key, { at: Date.now(), stations });
-    return respond(stations, 'google', Date.now());
   } catch (e) {
-    console.error('Places fetch failed:', e.message);
-    if (cached) return respond(cached.stations, 'cache', cached.at, true);
-    return sendJson(res, 502, { error: `Could not fetch prices: ${e.message}`, budget });
+    sendJson(res, e.status || 500, { error: e.message, budget: { used: usage.calls, limit: cfg.maxGoogleCallsPerDay } });
   }
 }
 
@@ -403,6 +410,117 @@ async function handleGeocode(res, params) {
   } catch (e) {
     sendJson(res, 502, { error: `Geocoding failed: ${e.message}` });
   }
+}
+
+// ---------------------------------------------------------------- push alerts
+// Requires the web-push package and VAPID keys (env vars or config.json).
+// Without them the server runs fine and alert endpoints report "disabled".
+let webpush = null;
+try { webpush = (await import('web-push')).default; } catch { /* dependency not installed */ }
+
+const ALERTS = Boolean(webpush && cfg.vapidPublicKey && cfg.vapidPrivateKey);
+if (ALERTS) webpush.setVapidDetails('mailto:lesliepeters18@gmail.com', cfg.vapidPublicKey, cfg.vapidPrivateKey);
+
+const SUBS_FILE = path.join(DATA_DIR, 'subs.json');
+let subs = [];
+try { subs = JSON.parse(fs.readFileSync(SUBS_FILE, 'utf8')); } catch { /* none yet */ }
+
+function saveSubs() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(SUBS_FILE, JSON.stringify(subs));
+  } catch (e) {
+    console.warn('could not persist subscriptions:', e.message);
+  }
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (c) => {
+      data += c;
+      if (data.length > 100e3) { reject(new Error('body too large')); req.destroy(); }
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(data || '{}')); } catch { reject(new Error('invalid JSON body')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+const FUELS = ['regular', 'midgrade', 'premium', 'diesel'];
+
+async function handleSubscribe(req, res) {
+  if (!ALERTS) return sendJson(res, 503, { error: 'alerts are not configured on this server (VAPID keys missing)' });
+  const b = await readBody(req);
+  const sub = b.subscription;
+  if (!sub?.endpoint || !sub?.keys) return sendJson(res, 400, { error: 'subscription required' });
+  const lat = Number(b.lat), lng = Number(b.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return sendJson(res, 400, { error: 'lat/lng required' });
+  const entry = {
+    endpoint: sub.endpoint,
+    keys: sub.keys,
+    fuel: FUELS.includes(b.fuel) ? b.fuel : 'regular',
+    thresholdCents: Math.min(400, Math.max(50, Number(b.thresholdCents) || 150)),
+    lat,
+    lng,
+    radiusKm: Math.min(25, Math.max(2, Number(b.radiusKm) || 10)),
+    lastNotified: subs.find((s) => s.endpoint === sub.endpoint)?.lastNotified || null,
+  };
+  subs = subs.filter((s) => s.endpoint !== entry.endpoint);
+  subs.push(entry);
+  saveSubs();
+  sendJson(res, 200, { ok: true, count: subs.length });
+}
+
+async function handleUnsubscribe(req, res) {
+  const b = await readBody(req);
+  subs = subs.filter((s) => s.endpoint !== b.endpoint);
+  saveSubs();
+  sendJson(res, 200, { ok: true });
+}
+
+// Pinged by an external cron every 20-30 min (which also keeps the free
+// instance awake). Internally throttled so extra pings cost nothing.
+let lastAlertsRun = 0;
+async function handleAlertsRun(res) {
+  if (!ALERTS) return sendJson(res, 200, { ok: true, skipped: 'alerts not configured' });
+  if (Date.now() - lastAlertsRun < 20 * 60e3) {
+    return sendJson(res, 200, { ok: true, skipped: 'ran recently', subs: subs.length });
+  }
+  lastAlertsRun = Date.now();
+  let sent = 0, dropped = 0, checked = 0;
+  for (const sub of [...subs]) {
+    try {
+      const r = await getStationsFor(sub.lat, sub.lng, sub.radiusKm);
+      checked++;
+      const priced = r.stations
+        .filter((s) => s.prices[sub.fuel])
+        .sort((a, b) => a.prices[sub.fuel].cents - b.prices[sub.fuel].cents);
+      if (!priced.length) continue;
+      const best = priced[0];
+      const cents = best.prices[sub.fuel].cents;
+      const today = new Date().toISOString().slice(0, 10);
+      if (cents <= sub.thresholdCents && sub.lastNotified !== today) {
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, JSON.stringify({
+          title: `⛽ ${cents.toFixed(1)}¢/L near you`,
+          body: `${best.name} has ${sub.fuel} at ${cents.toFixed(1)}¢/L — at or below your ${sub.thresholdCents}¢ alert.`,
+          url: '/',
+        }));
+        sub.lastNotified = today;
+        sent++;
+      }
+    } catch (e) {
+      if (e.statusCode === 404 || e.statusCode === 410) {
+        subs = subs.filter((s) => s.endpoint !== sub.endpoint);
+        dropped++;
+      } else {
+        console.warn('alert check failed:', e.message);
+      }
+    }
+  }
+  saveSubs();
+  sendJson(res, 200, { ok: true, subs: subs.length, checked, sent, dropped });
 }
 
 // ---------------------------------------------------------------- static files
@@ -441,10 +559,18 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/geocode') return await handleGeocode(res, url.searchParams);
     if (url.pathname === '/api/iplocate') return await handleIpLocate(req, res);
     if (url.pathname === '/api/route') return await handleRoute(res, url.searchParams);
+    if (url.pathname === '/api/push/pubkey') {
+      return sendJson(res, 200, { enabled: ALERTS, key: cfg.vapidPublicKey || null });
+    }
+    if (url.pathname === '/api/push/subscribe' && req.method === 'POST') return await handleSubscribe(req, res);
+    if (url.pathname === '/api/push/unsubscribe' && req.method === 'POST') return await handleUnsubscribe(req, res);
+    if (url.pathname === '/api/alerts/run') return await handleAlertsRun(res);
     if (url.pathname === '/api/health') {
       return sendJson(res, 200, {
         ok: true,
         mock: MOCK,
+        alerts: ALERTS,
+        subs: subs.length,
         budget: { used: usage.calls, limit: cfg.maxGoogleCallsPerDay },
       });
     }

@@ -164,6 +164,13 @@
           </div>
         </div>
         <div class="setting-row">
+          <div class="setting-info"><span class="setting-name">Price alert</span><span class="setting-desc">Notify me when fuel near me drops to my target</span></div>
+          <div class="vehicle-fields">
+            <label class="num-field"><span>¢/L target</span><input id="alert-cents" type="number" min="50" max="400" step="0.5" inputmode="decimal"></label>
+            <button id="toggle-alert" class="switch" role="switch" aria-checked="false" aria-label="Enable price alerts" style="align-self:flex-end"><span class="knob"></span></button>
+          </div>
+        </div>
+        <div class="setting-row">
           <div class="setting-info"><span class="setting-name">Your vehicle</span><span class="setting-desc">Powers the “worth the drive?” math</span></div>
           <div class="vehicle-fields">
             <label class="num-field"><span>L/100 km</span><input id="econ-input" type="number" min="3" max="30" step="0.1" inputmode="decimal"></label>
